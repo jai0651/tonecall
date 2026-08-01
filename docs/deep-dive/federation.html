@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Federation</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+a{color:var(--accent)}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+</style>
+</head>
+<body>
+<nav>
+<a href="index.html">Index</a>
+<a href="call-lifecycle.html">Call Lifecycle</a>
+<a href="handshake.html">Handshake</a>
+<a href="pairing-broker.html">Pairing &amp; Broker</a>
+<a href="audio-pipeline.html">Audio Pipeline</a>
+<a class="here" href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>Federation — two middlewares, one deal</h1>
+<p class="sub">The default demo topology: each agent runs on its own process, and the ONLY things the processes share are (1) the phone call between their DIDs, (2) the broker URL, (3) the pair secret. Files: <code>src/lib/agentConfigs.ts</code> (AGENT_OWNED), <code>src/ws/pairedMode.ts</code>, <code>src/lib/eventBus.ts</code>, <code>src/app/api/forward-event/route.ts</code>, <code>src/app/api/simulate*/…</code>.</p>
+
+<h2>Why this is the default (and why it matters)</h2>
+<p>In single-process mode, one orchestrator (<code>demoFlow.ts</code>) scripts both agents — great for metrics, but structurally it's one program talking to itself. Federation is the honest claim: two independent runtimes that <em>cannot</em> cheat through shared memory discover each other purely over the call (DTMF preamble) and coordinate purely over the wire (broker HTTP + data relay). Everything cross-vendor AVIP promises is exercised by this topology; a Twilio-side implementation would slot in where instance B sits, changing nothing on instance A.</p>
+
+<h2>Topology and env matrix</h2>
+<pre>
+                 PSTN / Plivo Dial bridge
+   DID A  ◀═══════════ audio + DTMF ═══════════▶  DID B
+     │                                              │
+     ▼ answer/stream webhooks                       ▼ answer/stream webhooks
+┌──────────────────────────┐          ┌──────────────────────────┐
+│ instance A (leader)      │          │ instance B               │
+│ owns vegetable_vendor    │          │ owns pizza_shop          │
+│ runs THE broker          │◀─ HTTP ──│ /api/pair (HMAC-signed)  │
+│ runs THE data relay      │◀─ WSS ───│ /data/&lt;sessionId&gt;        │
+│ dashboard of record      │◀─ HTTP ──│ event forwarding         │
+└──────────────────────────┘          └──────────────────────────┘
+</pre>
+<table>
+<tr><th>Env</th><th>Instance A (leader)</th><th>Instance B</th><th>Effect</th></tr>
+<tr><td><code>AGENT_OWNED</code></td><td><code>vegetable_vendor</code></td><td><code>pizza_shop</code></td><td><code>agentConfigs.ts</code> filters the two-persona table down to one; <code>getAgentConfig()</code> for the other number returns undefined, so this instance 404s webhooks that aren't its business.</td></tr>
+<tr><td><code>PORT</code> / <code>PUBLIC_HOST</code></td><td>3000 / tunnelA</td><td>3001 / tunnelB</td><td>PUBLIC_HOST lands in the Stream URL each instance writes into its answer XML.</td></tr>
+<tr><td><code>BROKER_URL</code></td><td><em>unset</em> → I am the broker</td><td><code>http(s)://tunnelA</code></td><td>Decides in-process vs signed-HTTP pairing, and which host serves <code>/data</code>.</td></tr>
+<tr><td><code>FORWARD_EVENTS_TO</code></td><td>unset</td><td><code>http(s)://tunnelA</code></td><td>Every <code>publishDemo</code> on B is also POSTed (fire-and-forget) to A's <code>/api/forward-event</code>, which re-emits with <code>publishLocal</code> (never re-forwards → no loops). One dashboard shows both legs.</td></tr>
+<tr><td><code>AVIP_PAIR_SECRET</code></td><td colspan="2">same value on both</td><td>HMAC for /api/pair. Unset = open pairing (dev only).</td></tr>
+</table>
+<p><code>npm run dev:a</code> / <code>npm run dev:b</code> bake all of the above with localhost defaults (dev:b points BROKER_URL and FORWARD_EVENTS_TO at :3000).</p>
+
+<h2>How a federated call differs from the single-process trace</h2>
+<p>Follow the <a href="call-lifecycle.html">lifecycle</a> steps; only the destinations change:</p>
+<table>
+<tr><th>Step</th><th>Where it runs</th><th>Detail</th></tr>
+<tr><td>Trigger</td><td>instance A only</td><td>Must be A: the <code>numberA_not_owned</code> guard rejects triggering from an instance that doesn't own the originating agent, because the pending-dial stash and the initiator webhook must land in the same process.</td></tr>
+<tr><td>Answer, leg A</td><td>instance A</td><td>Claims the pending dial → <code>&lt;Stream tunnelA&gt;+&lt;Dial B&gt;</code>.</td></tr>
+<tr><td>Answer, leg B</td><td><strong>instance B</strong></td><td>DID B's Plivo Application points at tunnelB. B needs <em>zero advance notice</em> — no peer-notify, no shared key. It treats the call like any inbound: <code>&lt;Stream tunnelB&gt;+&lt;Wait&gt;</code>, responder role.</td></tr>
+<tr><td>Handshake</td><td>each instance, own leg</td><td>The preamble rides the bridge; neither process sees the other's emit except as inbound DTMF.</td></tr>
+<tr><td>Pairing</td><td>broker on A</td><td>A submits in-process; B POSTs signed. Same matcher, same sessionId.</td></tr>
+<tr><td>Conversation</td><td>each instance, own leg</td><td>Both claim orchestrator <em>locally</em>, both find only 1 local leg after the 1.5s grace, both take <code>runSoloPairedMode</code>.</td></tr>
+<tr><td>Hangup</td><td>each instance</td><td>Each RESTs hangup for its own callUuid with its own account creds.</td></tr>
+</table>
+
+<h2>Solo paired mode — distributed turn-taking without coordination</h2>
+<p><code>runSoloPairedMode({ws, callUuid, config, sessionId, role})</code>. The initiator/responder role — already agreed via topology — sequences everything; there is no other synchronization:</p>
+<pre>
+INITIATOR                                     RESPONDER
+─────────                                     ─────────
+open data WS to broker                        open data WS to broker
+speak LLM intro on own leg  ──audio bridge──▶ (hears it; doesn't parse it)
+send {hello, capabilities}  ──data relay────▶ first peer message arrives:
+                                                1. speak own LLM intro   ◀── audio
+                                                2. llm.respondJson(hello) → reply
+reply arrives → respondJson → …               … alternating, MAX_TURNS=12 cap …
+                       either side emits {type:"bye"} (or reply.done=true)
+speak LLM goodbye (summarizes JSON history)   speak LLM goodbye
+REST hangup own leg                           REST hangup own leg
+</pre>
+<ul>
+<li><strong>Only the initiator opens with hello.</strong> The old version had both sides fire hellos, producing two interleaved conversations. One opener + respond-on-receive = strict alternation with zero cross-process locking.</li>
+<li><strong>Intros can't overlap</strong>: the responder speaks its intro only upon the first data message, which the initiator sends after finishing its own intro (<code>speak()</code> blocks for playout duration).</li>
+<li><strong>Goodbyes are grounded</strong>: each side prompts <code>llm.respondText</code> with the last 10 JSON messages, so the spoken summary reflects the actual outcome ("Order confirmed, six AM delivery…"), with a hardcoded line only as exception fallback.</li>
+<li><strong>Failure containment</strong>: an <code>AbortController</code> tied to both sockets stops the loop if either closes; the data relay's synthetic <code>bye</code> (see <a href="pairing-broker.html">Pairing</a>) unblocks the survivor if the peer process dies; the 12-turn cap bounds a runaway LLM.</li>
+<li>The cosmetic "modem chirp" audio from the hackathon build is gone here — on a real bridge the peer would actually hear it over the intros.</li>
+</ul>
+
+<h2>The simulators — testing all of this without a phone bill</h2>
+<p>Both fake exactly one thing: Plivo. They open client WSes to <code>/voice/:callUuid</code> and shuttle each leg's outbound <code>sendDTMF</code> to the other leg as inbound <code>dtmf</code> events — byte-for-byte what the Dial bridge does. Everything downstream (handshake, roles, broker, HMAC, paired mode, events) is the production code path.</p>
+<table>
+<tr><th></th><th>Local sim</th><th>Federated sim</th></tr>
+<tr><td>Invoke</td><td><code>POST /api/simulate</code> <code>{}</code></td><td><code>POST /api/simulate</code> <code>{"peerBase":"http://localhost:3001"}</code> on instance A</td></tr>
+<tr><td>Prereq</td><td>one instance, both agents</td><td>dev:a + dev:b running</td></tr>
+<tr><td>Legs</td><td>both WSes into this process</td><td>leg A WS → A; leg B WS → B (B first registers the callUuid via <code>POST /api/simulate-register</code>, which maps it to B's owned agent — the WS handler needs that registry entry within 1s)</td></tr>
+<tr><td>Roles</td><td><code>markDialInitiator(callA)</code></td><td>same — A's leg initiates, B's leg responds by default</td></tr>
+<tr><td>Exercises</td><td>handshake + in-process pairing + centralized demoFlow</td><td>handshake across processes + signed HTTP pairing + solo paired mode + relay + event forwarding — <em>the entire federated stack</em></td></tr>
+</table>
+
+<h2>Runbooks</h2>
+<h3>Local, stubs, zero cost</h3>
+<pre>
+npm install
+npm run dev:a                      # terminal 1
+npm run dev:b                      # terminal 2
+curl -X POST http://localhost:3000/api/simulate \
+     -H 'Content-Type: application/json' \
+     -d '{"peerBase":"http://localhost:3001"}'
+open http://localhost:3000         # both legs on one dashboard
+</pre>
+<h3>Live over Plivo</h3>
+<pre>
+1. two tunnels:            ngrok http 3000   +   ngrok http 3001
+2. instance A env:         AGENT_OWNED=vegetable_vendor PUBLIC_HOST=tunnelA
+                           USE_STUBS=false AVIP_PAIR_SECRET=&lt;s&gt; (+ Plivo/OpenAI creds)
+   instance B env:         AGENT_OWNED=pizza_shop PUBLIC_HOST=tunnelB
+                           BROKER_URL=https://tunnelA FORWARD_EVENTS_TO=https://tunnelA
+                           USE_STUBS=false AVIP_PAIR_SECRET=&lt;s&gt;
+3. Plivo console:          DID A's Application → https://tunnelA/api/answer (POST)
+                           DID B's Application → https://tunnelB/api/answer (POST)
+4. trigger on A:           curl -X POST https://tunnelA/api/trigger-call
+5. human test:             dial DID B from your phone → 8s quiet → pizza_shop greets you
+</pre>
+
+<h2>Federation limits (current, known)</h2>
+<ul>
+<li><strong>The broker is a role, not a service</strong> — instance A is a single point of failure for pairing and the data relay. Fine for two parties; a real deployment splits the broker out (or replaces it with the roadmap's <code>/.well-known</code> direct-WSS discovery).</li>
+<li><strong>Shared-secret trust</strong> — see the threat table on the <a href="pairing-broker.html">Pairing page</a>.</li>
+<li><strong>The trigger is asymmetric</strong> — only the instance owning the originating agent can start a call. B can equally trigger toward A; there's just no "third party asks both to talk" flow yet.</li>
+<li><strong>Event forwarding is lossy by design</strong> — fire-and-forget POSTs; a dropped event means a gap on the leader dashboard, never a broken call.</li>
+</ul>
+
+<p style="margin-top:2.5rem">Next: <a href="state-registries.html"><strong>State &amp; Registries</strong></a> — the seven Maps everything above leans on.</p>
+</main>
+</body>
+</html>

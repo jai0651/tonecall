@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Pairing &amp; Broker</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+a{color:var(--accent)}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+</style>
+</head>
+<body>
+<nav>
+<a href="index.html">Index</a>
+<a href="call-lifecycle.html">Call Lifecycle</a>
+<a href="handshake.html">Handshake</a>
+<a class="here" href="pairing-broker.html">Pairing &amp; Broker</a>
+<a href="audio-pipeline.html">Audio Pipeline</a>
+<a href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>Pairing &amp; Broker — two nonces become one session</h1>
+<p class="sub">Files: <code>src/ws/broker.ts</code>, <code>src/app/api/pair/route.ts</code>, <code>src/lib/pairAuth.ts</code>, <code>src/lib/sessionRegistry.ts</code>, <code>src/ws/dataHandler.ts</code>, <code>src/ws/dataChannels.ts</code>, <code>src/lib/brokerUrl.ts</code>.</p>
+
+<h2>The problem the broker solves</h2>
+<p>After the handshake, each leg privately holds an ordered pair: <em>(my nonce, the nonce I heard)</em>. Neither side can talk to the other yet — the only channel they share is the phone call. The broker is the rendezvous: both submit their pairs, and if the pairs are mirror images, they must have been on the same call hearing each other. The reward is a shared <code>sessionId</code> that names a WebSocket relay.</p>
+
+<h2>The matching algorithm</h2>
+<p><code>requestPairing({callUuid, myNonce, peerNonce, agentNumber})</code> in <code>broker.ts</code>. State: a single Map, <code>pending: myNonce → PendingPair</code>.</p>
+<pre>
+requestPairing(A):                                # A = {myNonce: NA, peerNonce: NB}
+  peer = pending.get(A.peerNonce)                 # is someone waiting under NB?
+  if peer AND peer.peerNonce === A.myNonce:       # …and did THEY claim NA as their peer?
+      sessionId = randomBytes(8).hex              # 16 hex chars
+      clear peer's timer; pending.delete(NB)
+      publish handshake.paired
+      resolve BOTH promises with sessionId        # peer.resolve(id); resolve(id)
+  else:
+      pending.set(NA, {…, timer: reject after PAIR_TIMEOUT_MS=10s})
+</pre>
+<p>Things to notice:</p>
+<ul>
+<li><strong>Cross-wise, both directions.</strong> A lookup under <em>their</em> nonce plus an equality check on <em>ours</em>. Presenting one overheard nonce isn't enough — you must present the exact mirrored pair. An impostor who submits <code>{my: NB, peer: X≠NA}</code> parks forever (there's a unit test for exactly this).</li>
+<li><strong>First arrival parks, second resolves.</strong> The 10s <code>PAIR_TIMEOUT_MS</code> exists because the two legs submit at staggered times — the responder typically ~3s later than the initiator (it had to play its preamble first).</li>
+<li><strong>One-shot.</strong> On match the pending entry is deleted; a replayed submission after the fact just parks and times out.</li>
+</ul>
+
+<h2>Two submission paths</h2>
+<p><code>pairViaBroker()</code> (in <code>stateMachine.ts</code>) picks by a single rule:</p>
+<table>
+<tr><th><code>BROKER_URL</code></th><th>Path</th><th>Used by</th></tr>
+<tr><td>unset</td><td>Call <code>requestPairing()</code> directly, in-process</td><td>Single-middleware mode and the broker-owning instance in federation. No HTTP, no signature (same trust domain).</td></tr>
+<tr><td>set</td><td><code>POST {BROKER_URL}/api/pair</code> with an HMAC-signed body, 12s client timeout (must outlive the broker's 10s pairing window)</td><td>Non-broker instances in federation.</td></tr>
+</table>
+<div class="note">Earlier code tried in-process first and <em>fell back</em> to HTTP after the in-process attempt rejected — which in federation meant a wasted 10s park before every real pair. The rule is now explicit: BROKER_URL decides, no fallback chain.</div>
+
+<h2>HMAC signing (pairAuth.ts)</h2>
+<p>Why: the DTMF preamble is audible. A tap on the call hears both nonces and could race the honest responder to the broker and hijack the session. The fix binds pair submissions to a deployment secret:</p>
+<pre>
+payload   = `${callUuid}|${myNonce}|${peerNonce}|${agentNumber}|${ts}`   # ts = epoch ms
+signature = hex( HMAC-SHA256( AVIP_PAIR_SECRET, payload ) )
+wire body = { callUuid, myNonce, peerNonce, agentNumber, ts, signature }
+</pre>
+<p>Verification at <code>/api/pair</code>, in order:</p>
+<ol>
+<li>No <code>AVIP_PAIR_SECRET</code> configured → accept everything (open pairing; dev default). Signing side is symmetric: no secret → no ts/signature fields.</li>
+<li><code>ts</code> or <code>signature</code> missing → <code>401 missing_signature</code>.</li>
+<li><code>|now − ts| &gt; AVIP_PAIR_MAX_SKEW_MS</code> (default 30s) → <code>401 stale_timestamp</code>. This is the replay bound: a captured request dies within 30s, and nonces are per-call anyway.</li>
+<li>Recompute; compare with <code>crypto.timingSafeEqual</code> on hex-decoded buffers (length-checked first, since <code>timingSafeEqual</code> throws on unequal lengths) → mismatch is <code>401 bad_signature</code>.</li>
+</ol>
+<table>
+<tr><th>Threat</th><th>Covered?</th><th>How / gap</th></tr>
+<tr><td>Session-steal by nonce eavesdropper</td><td>✅</td><td>Can't produce a valid signature without the secret.</td></tr>
+<tr><td>Replay of a captured signed request</td><td>✅ (bounded)</td><td>30s skew window + one-shot pending entries + per-call nonces.</td></tr>
+<tr><td>Tamper (swap agentNumber/nonces)</td><td>✅</td><td>All fields are inside the signed payload.</td></tr>
+<tr><td>Timing side-channel on compare</td><td>✅</td><td><code>timingSafeEqual</code>.</td></tr>
+<tr><td>Rogue <em>federation member</em></td><td>❌</td><td>Shared secret = everyone in the federation can impersonate everyone. Per-domain keys at <code>/.well-known</code> (AVIP-3) is the planned fix — same wire format, different key distribution.</td></tr>
+<tr><td>Broker DoS (nonce flooding)</td><td>❌</td><td>No rate limiting on /api/pair; entries do expire in 10s.</td></tr>
+</table>
+
+<h2>After pairing: sessionRegistry and the orchestrator claim</h2>
+<p><code>sessionRegistry.ts</code> maps <code>sessionId → {legs[], orchestratorCallUuid, completionResolvers[]}</code>. Three operations shape the conversation topology:</p>
+<pre>
+registerSessionLeg   dedupe by agent number → twins get {registered:false} and park
+claimOrchestrator    null-check-then-set on orchestratorCallUuid → exactly one winner
+                     (atomic because Node is single-threaded between awaits)
+signalDemoComplete   resolve every parked waiter, delete the session
+</pre>
+<p>The winner then samples reality for 1.5s (<code>waitForLocalPeer</code>): if the session gains a second <em>local</em> leg, this process owns the whole call → centralized <code>runDemoFlow</code>. If not, the peer leg lives in another process → federated <code>runSoloPairedMode</code>. Note both federated instances "win" their own local claim — by design, each drives exactly its own leg.</p>
+
+<h2>The /data relay — the actual agent-to-agent channel</h2>
+<p><code>server.ts</code> upgrades <code>/data/:sessionId</code> → <code>handleDataConnection</code>. The relay is intentionally trivial (~40 lines):</p>
+<pre>
+on connect:  joinSession(sessionId, ws)          # dataChannels: sessionId → peers[]
+on message:  parse best-effort → publish agent.message on eventBus (dashboard tap)
+             for each OTHER open peer in session: peer.send(raw)   # byte-forward, no validation
+on close:    leaveSession(...)
+             every remaining peer gets a synthetic {"type":"bye"}  # unblocks the survivor's loop
+</pre>
+<ul>
+<li><strong>The broker never interprets traffic.</strong> Schema, turn-taking, termination are all agent-side concerns. This is what keeps the relay protocol-version-agnostic.</li>
+<li><strong>The synthetic bye matters:</strong> if one middleware crashes or hangs up early, the surviving agent's read loop would otherwise block until its own MAX_TURNS cap. The relay converts a disconnect into a clean protocol-level goodbye.</li>
+<li>In centralized mode the two "peers" are two client WSes opened by the same orchestrator process; in federated mode they're opened by different middlewares. The relay can't tell and doesn't care.</li>
+<li><code>brokerUrl.ts</code> derives <code>ws(s)://</code> from <code>BROKER_URL</code> (http→ws, https→wss), defaulting to <code>localhost:$PORT</code>.</li>
+</ul>
+
+<h2>The message schema riding the relay</h2>
+<p><code>AgentJsonMessage</code> (<code>src/types/index.ts</code>) — a discriminated union, so receivers route on <code>msg.type</code> without an LLM call:</p>
+<pre>
+{ type:"hello",   from, capabilities[] }      # announce + capability list
+{ type:"intent",  name, slots{} }             # "I want X with parameters Y"
+{ type:"reply",   text, slots?, done? }       # free-form step; done=true ends a thread
+{ type:"confirm", orderId?, etaMinutes?, totalUsd? }
+{ type:"commit",  paymentToken? }
+{ type:"request_voice_mode", reason }         # escape hatch back to audio (defined, not yet acted on)
+{ type:"bye" }                                # terminates the loop on both sides
+</pre>
+<p>Senders tag messages with <code>from</code> at the wire layer (<code>{...payload, from: config.name}</code>) so the dashboard can attribute them. The LLM is prompted with this exact union (see <code>JSON_SHAPE_INSTRUCTION</code> in <code>llm.ts</code>) and forced through OpenAI's <code>response_format: json_object</code>; unparseable output degrades to a <code>reply</code> wrapping the raw text rather than crashing the loop.</p>
+
+<h2>End-to-end pairing trace (federated, signed)</h2>
+<pre>
+legA@instanceA (broker)                       legB@instanceB
+──────────────────────                        ──────────────
+handshake done: {NA, peer NB}                 handshake done: {NB, peer NA}
+BROKER_URL unset                              BROKER_URL=https://tunnelA
+requestPairing() in-process                   sign(callUuid|NB|NA|number|ts)
+  → pending[NA] parked (≤10s)                 POST tunnelA/api/pair
+                                              → verifyPairRequest ✓
+                                              → requestPairing() finds pending[NA]
+                                              → peer.peerNonce === NB ✓
+        sessionId 4cd774ba333c12ba minted — both resolve
+wss tunnelA/data/4cd…  ◀── relay ──▶  wss tunnelA/data/4cd…
+</pre>
+
+<p style="margin-top:2.5rem">Next: <a href="audio-pipeline.html"><strong>Audio Pipeline</strong></a> — what actually flows over the voice WS.</p>
+</main>
+</body>
+</html>

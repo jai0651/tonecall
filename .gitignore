@@ -1,0 +1,24 @@
+node_modules/
+.next/
+out/
+build/
+.env
+.env.local
+*.log
+.DS_Store
+.vscode/
+.idea/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+tonecall.log.live
+tonecall.log
+.env.*
+
+# Recorded / captured audio artifacts — produced when RECORD_AUDIO=true
+# or AVIP_CAPTURE=1 dumps inbound mu-law for offline inspection.
+tonecall_audio/
+*.wav
+*.mulaw
+*.mp3
+*.opus

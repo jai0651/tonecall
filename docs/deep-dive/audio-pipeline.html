@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Audio Pipeline</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+a{color:var(--accent)}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+</style>
+</head>
+<body>
+<nav>
+<a href="index.html">Index</a>
+<a href="call-lifecycle.html">Call Lifecycle</a>
+<a href="handshake.html">Handshake</a>
+<a href="pairing-broker.html">Pairing &amp; Broker</a>
+<a class="here" href="audio-pipeline.html">Audio Pipeline</a>
+<a href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>Audio Pipeline — every byte on the voice wire</h1>
+<p class="sub">Files: <code>src/lib/audio.ts</code>, <code>src/lib/audioCodec.ts</code>, <code>src/lib/tts.ts</code>, <code>src/lib/stt.ts</code>, <code>src/ws/voiceTurn.ts</code>, <code>src/ws/voiceMode.ts</code>, <code>src/lib/plivo.ts</code>.</p>
+
+<h2>The Plivo Stream WebSocket — wire protocol</h2>
+<p>Declared by the answer XML: <code>&lt;Stream keepCallAlive="true" bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"&gt;wss://…/voice/&lt;callUuid&gt;&lt;/Stream&gt;</code>. Plivo then connects to us (we are the WS <em>server</em>). Constraint to memorize: <code>bidirectional="true"</code> forces <code>audioTrack="inbound"</code> — we hear what the far side sends, and can inject audio toward our side's speaker. Across a Dial bridge that's exactly symmetric: my playAudio = your inbound.</p>
+
+<h3>Plivo → us (JSON text frames)</h3>
+<table>
+<tr><th>Event</th><th>Shape (abridged)</th><th>When / what we do</th></tr>
+<tr><td><code>start</code></td><td><code>{event:"start", start:{callId, streamId, mediaFormat:{encoding:"mulaw", sampleRate:8000}, tracks}}</code></td><td>Stream established. We log it; nothing else keys off it.</td></tr>
+<tr><td><code>media</code></td><td><code>{event:"media", media:{payload:"&lt;base64&gt;", track, timestamp, chunk}}</code></td><td>Every ~20ms: 160 bytes of μ-law (base64 → ~216 chars). voiceHandler taps it for debug capture/live playback; voiceMode feeds it to STT; the handshake ignores it.</td></tr>
+<tr><td><code>dtmf</code></td><td><code>{event:"dtmf", dtmf:{digit:"7", track}}</code></td><td>One event per detected tone — Plivo does the tone→symbol decoding (in-band or RFC 2833, we never know which). Forwarded to the <a href="handshake.html">dtmfBus</a>.</td></tr>
+<tr><td><code>stop</code></td><td><code>{event:"stop", stop:{reason}}</code></td><td>Stream ending. voiceMode resolves its loop on this.</td></tr>
+<tr><td><code>playedStream</code> / <code>clearedAudio</code></td><td>ack events</td><td>Currently unused (typed for completeness).</td></tr>
+</table>
+
+<h3>Us → Plivo (JSON text frames)</h3>
+<table>
+<tr><th>Event</th><th>Shape</th><th>Producer</th></tr>
+<tr><td><code>playAudio</code></td><td><code>{event:"playAudio", media:{contentType:"audio/x-mulaw", sampleRate:8000, payload:"&lt;base64&gt;"}}</code></td><td><code>playAudioFrame()</code> — all TTS output. Plivo queues payloads and plays them in order onto the leg's outbound.</td></tr>
+<tr><td><code>sendDTMF</code></td><td><code>{event:"sendDTMF", dtmf:"909012345678#"}</code></td><td><code>sendDtmfOverStream()</code> — the handshake preamble. Same effect as REST <code>sendDigits</code> but ~0ms RTT (no HTTP round trip). Plivo synthesizes proper tones/2833 events onto outbound.</td></tr>
+<tr><td><code>clearAudio</code> / <code>checkpoint</code></td><td>flush / position-mark</td><td>Helpers exist (<code>clearAudioFrame</code>, <code>checkpointFrame</code>); nothing calls them yet — they're the primitives a future barge-in implementation needs.</td></tr>
+</table>
+
+<h2>Framing arithmetic</h2>
+<pre>
+8000 samples/sec × 1 byte/sample (μ-law) = 8000 B/s
+FRAME_BYTES        = 160  → 160/8000 = 20ms per frame  (FRAME_DURATION_MS)
+1 second of speech = 50 frames = 8 KB raw ≈ 10.7 KB base64
+speak() chunk      = 1600 B = 200ms   (10 frames per playAudio payload)
+</pre>
+<p><code>chunkToFrames()</code> iterates a buffer in 160-byte steps and pads the tail with <code>0xFF</code> — which is μ-law for "sample value 0", i.e. digital silence; zero-padding would be a loud DC click.</p>
+
+<h2>G.711 μ-law — the codec, actually explained</h2>
+<p>Telephony's 8-bit logarithmic encoding (ITU-T G.711). Human hearing is logarithmic, so μ-law spends its 8 bits where ears care: fine resolution near silence, coarse near peaks. <code>audioCodec.ts</code> implements it from scratch — no dependencies:</p>
+<pre>
+encode(pcm16):                                  decode(byte):
+  sign = top bit; pcm = |pcm|                     invert byte (μ-law stores inverted)
+  clip at 32635; add BIAS 0x84                    exponent = bits 4-6, mantissa = bits 0-3
+  exponent = position of highest set bit (0-7)    sample = ((mantissa&lt;&lt;3)+0x84) &lt;&lt; exponent, − 0x84
+  mantissa = next 4 bits below it                 re-apply sign
+  byte = ~(sign | exponent&lt;&lt;4 | mantissa)
+</pre>
+<p>Effectively a tiny hardware-friendly float: 1 sign bit, 3 exponent bits, 4 mantissa bits. The rest of the codec file: linear-interpolation upsampling and window-averaging downsampling (<code>resamplePcm16</code>), and a minimal 44-byte-header WAV writer (<code>pcm16ToWav</code>) used for Whisper uploads and debug recordings. Quality target is explicitly "telephony, not studio" — no anti-alias filtering, which is fine for an 8kHz endpoint.</p>
+
+<h2>Text → speech: the speak() path</h2>
+<p><code>speak()</code> (<code>src/ws/voiceTurn.ts</code>) is the only way conversation code touches audio:</p>
+<pre>
+speak({ws, speakerName, text, voice, waitForDuration=true, tailMs=150})
+ 1. publish voice.transcript FIRST        # dashboard shows the line before audio exists
+ 2. tts.synthesize({text, voice})         # → Buffer of μ-law 8kHz
+ 3. ws.send(playAudioFrame(chunk)) per 1600B chunk, no pacing
+    # Plivo buffers; pacing only matters if you want to interrupt mid-utterance
+ 4. if waitForDuration: sleep(audio.length / 8000 × 1000 + tailMs)
+    # SENDING is instant; this sleep models PLAYBACK so callers can sequence turns
+</pre>
+<p>That step-4 sleep is the whole turn-taking mechanism in centralized mode: the orchestrator <code>await</code>s each <code>speak()</code>, so agents never talk over each other.</p>
+<p>Inside <code>tts.synthesize</code> (real variant): OpenAI <code>tts-1</code> with <code>response_format:'pcm'</code> → mono PCM16 @ 24kHz → <code>resamplePcm16(24000→8000)</code> → <code>pcm16ToMulaw</code>. First-byte latency ~300–600ms. Side effects, both optional: <code>RECORD_AUDIO=true</code> writes each utterance as a 24kHz WAV under <code>./tonecall_audio/</code>; <code>PLAY_LOCAL=true</code> pipes it to <code>afplay</code>/<code>aplay</code> so the operator hears the call live. Stub variant emits 1s of μ-law silence with a few marker bytes.</p>
+
+<h2>Speech → text: the STT path (human mode only)</h2>
+<p><code>openStt()</code> returns a stateful stream. Whisper is a batch API, so "streaming" is really <em>silence-gated batching</em>:</p>
+<pre>
+feed(160B frame):
+  append to buffer
+  compute silenceFraction(frame)            # fraction of samples near μ-law zero
+  if buffered speech ≥ ~1.4s AND trailing silence ≥ ~500ms:
+      mulawToPcm16 → resample 8k→16k → pcm16ToWav → whisper-1 /audio/transcriptions
+      return transcript (or null if the chunk was effectively silence)
+  else return null
+</pre>
+<p>Consequence: end-of-utterance detection adds ~500ms minimum latency, and there is no barge-in — the agent finishes speaking regardless. The header comment says the honest thing: this path exists to <em>demonstrate the slow lane</em> that the data channel replaces; swapping to a realtime STT API is an upgrade, not a redesign.</p>
+
+<h2>The human voice loop, assembled</h2>
+<pre>
+runVoiceMode (src/ws/voiceMode.ts):
+  publish phase.started(human_voice)
+  speak(greeting)                     # persona-fixed line, the one scripted string in the flow
+  for each media event:
+      stt.feed(frame) → transcript?  → publish voice.transcript(caller)
+      llm.respondText(persona, history, transcript)
+      speak(reply)                    # 20ms-paced frame sends here (interruptible-ish)
+  until stop event or WS close
+  stt.close(); publish phase.ended; REST hangup
+</pre>
+<p>Note the asymmetry: <code>voiceMode</code>'s private speak paces frames at 20ms intervals (so a hangup mid-reply stops promptly), while <code>voiceTurn.speak()</code> burst-sends and sleeps. Two implementations, two trade-offs; both end up as the same playAudio wire frames.</p>
+
+<h2>Latency budget (why the data channel wins)</h2>
+<pre>
+one VOICE turn (human or agent):        one DATA turn:
+  utterance playout      2–4s             llm.respondJson     0.5–2s
+  end-of-speech gate     0.5s             ws relay            ~0ms
+  whisper batch          0.3–1s           ────────────────────────
+  llm.respondText        0.5–2s           total               ~0.5–2s
+  tts first byte         0.3–0.6s
+  reply playout          2–4s
+  ────────────────────────────
+  total                  ~5–12s
+</pre>
+<p>The demo.summary metrics (<code>demoFlow.publishSummary</code>) monetize this: voice seconds are billed at a blended $0.0035/s (PSTN+STT+LLM+TTS), data seconds at $0.0008/s (LLM only), and the counterfactual baseline is <em>dataTurns × this call's observed voice sec/turn</em> — an estimate derived from the same call, not a canned number (falls back to 4s/turn only if zero voice turns were observed).</p>
+
+<h2>Debug taps</h2>
+<table>
+<tr><th>Env</th><th>Effect</th></tr>
+<tr><td><code>AVIP_CAPTURE=1</code></td><td>voiceHandler tees every inbound μ-law frame to <code>/tmp/avip-capture-&lt;number&gt;-&lt;callUuid&gt;.mulaw</code>. Convert: <code>sox -t ul -r 8000 -c 1 in.mulaw out.wav</code>.</td></tr>
+<tr><td><code>AVIP_PLAY=1</code></td><td>Pipes inbound audio to a live <code>sox play</code> subprocess, one per number (twins share via refcount), each agent panned to a different stereo side.</td></tr>
+<tr><td><code>RECORD_AUDIO=true</code></td><td>Every TTS utterance saved as WAV before μ-law conversion.</td></tr>
+<tr><td><code>PLAY_LOCAL=true</code></td><td>Every TTS utterance also played on the server machine's speakers.</td></tr>
+</table>
+
+<p style="margin-top:2.5rem">Next: <a href="federation.html"><strong>Federation</strong></a> — the two-instance topology this all runs in by default.</p>
+</main>
+</body>
+</html>

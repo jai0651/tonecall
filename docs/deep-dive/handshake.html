@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Handshake</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+a{color:var(--accent)}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+</style>
+</head>
+<body>
+<nav>
+<a href="index.html">Index</a>
+<a href="call-lifecycle.html">Call Lifecycle</a>
+<a class="here" href="handshake.html">Handshake</a>
+<a href="pairing-broker.html">Pairing &amp; Broker</a>
+<a href="audio-pipeline.html">Audio Pipeline</a>
+<a href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>The Handshake — in-band DTMF, symbol by symbol</h1>
+<p class="sub">Files: <code>src/lib/dtmf.ts</code> (grammar + detector), <code>src/ws/stateMachine.ts</code> (<code>runInBandNonceHandshake</code>), <code>src/lib/dtmfBus.ts</code>, <code>src/lib/dialRegistry.ts</code> (roles).</p>
+
+<h2>Why DTMF at all</h2>
+<p>The handshake signal must survive whatever sits between two arbitrary phone endpoints: codecs, carriers, transcoding, cross-vendor bridges. DTMF (the touch-tone signal) is the one thing the entire phone network has treated as sacred for 50 years — IVRs depend on it, so every hop either passes the tones through or re-encodes them as RFC 2833 signaling events. Plivo surfaces received DTMF as clean JSON <code>dtmf</code> events on the Stream WS, and lets us inject it with a <code>sendDTMF</code> WS event. We never touch raw tones.</p>
+
+<h2>The grammar</h2>
+<pre>
+preamble := "9090" nonce "#"
+nonce    := 8 decimal digits, zero-padded    (e.g. 00734921)
+
+full example:   9 0 9 0 6 1 0 4 5 1 0 0 #     (13 DTMF symbols)
+</pre>
+<table>
+<tr><th>Part</th><th>Why exactly this</th></tr>
+<tr><td><code>9090</code></td><td>Protocol magic + version marker. Digits only — Plivo's DTMF detector drops <code>*</code> more often than digits, so the classic "*-prefixed" style was rejected. Chosen to be something no human dials as the first thing on a call.</td></tr>
+<tr><td>8-digit nonce</td><td>Identifies <em>this leg for this handshake</em>. 10<sup>8</sup> space → a human randomly mashing a keypad has a 10<sup>-8</sup> chance of forging a specific valid nonce, and would additionally need the 9090 prefix and the # terminator around it. Generated with <code>Math.random()</code> deliberately: nonces prove <em>co-presence on the call</em>, not identity — identity is the HMAC layer at <a href="pairing-broker.html">pairing</a>.</td></tr>
+<tr><td><code>#</code></td><td>End marker, reliably detected across PSTN equipment. Lets the detector know the nonce is complete without length-prefix tricks.</td></tr>
+</table>
+<p>At typical 200ms tone + 100ms gap pacing, 13 symbols ≈ <strong>3.9 seconds</strong> of playout. That number drives every timeout below.</p>
+
+<h2>Roles come from topology, not names</h2>
+<p>Earlier builds broke ties alphabetically by agent name — which collapses in federation, where each middleware only knows its own agent (both sides would elect themselves initiator). Now the role is a fact about the call:</p>
+<table>
+<tr><th>Role</th><th>Who gets it</th><th>Recorded where</th></tr>
+<tr><td><code>initiator</code></td><td>The leg whose answer webhook <em>claimed a pending dial</em> — i.e. the leg that returned <code>&lt;Dial&gt;</code> XML. (Simulator legs get it via <code>markDialInitiator()</code>.)</td><td><code>dialRegistry</code>: <code>roleByCallUuid.set(callUuid,'initiator')</code> inside <code>claimDialTarget</code></td></tr>
+<tr><td><code>responder</code></td><td>Everyone else: the dialed-into peer DID, a human's inbound call, an unknown caller. It's the <em>absence</em> of an entry — <code>getDialRole()</code> defaults to responder.</td><td>(no entry)</td></tr>
+</table>
+<div class="note"><strong>The UX consequence:</strong> a responder never emits first. So a human calling one of our DIDs hears silence (then a greeting), never unsolicited beeping. Only the side that <em>placed</em> the call announces itself — and it placed the call on purpose.</div>
+
+<h2>runInBandNonceHandshake — the actual machine</h2>
+<p>One promise per leg, resolved by the first of three outcomes: success (<code>{myNonce, peerNonce, peerNonceAt}</code>), timeout (<code>null</code>), or WS close (<code>null</code>). Internals:</p>
+<pre>
+state:  resolved=false   hasEmitted=false   peerNonce=null
+wiring: dtmfBus.subscribe(agentNumber, digit → detector.feed)
+        ws.once('close', fail)
+timers: INITIATOR only → initialTimer  = setTimeout(fireEmit, 500ms)
+                         emitTimer     = setInterval(fireEmit, PREAMBLE_INTERVAL_MS=4s)
+        both roles     → timeoutTimer  = setTimeout(fail, windowMs)
+
+fireEmit():        ws.send({event:"sendDTMF", dtmf:"9090&lt;myNonce&gt;#"}); hasEmitted=true; succeed()
+on detected nonce: if nonce !== myNonce → peerNonce=nonce
+                   if !hasEmitted → fireEmit()      // responder answers NOW
+                   succeed()
+succeed():         only fires when hasEmitted AND peerNonce   // both directions done
+</pre>
+<p>Success therefore means: <em>we played our preamble AND we decoded theirs</em>. That two-sided requirement is what makes the subsequent broker submission cross-consistent.</p>
+
+<h3>Timing windows and why</h3>
+<table>
+<tr><th>Constant</th><th>Value (env)</th><th>Reasoning</th></tr>
+<tr><td><code>INITIATOR_FIRST_EMIT_MS</code></td><td>500ms</td><td>Emit almost immediately after our stream opens. On real calls this first burst is usually <em>wasted</em> — the Dial is still ringing, there's no bridge to carry it — and that's fine.</td></tr>
+<tr><td><code>REEMIT_INTERVAL_MS</code></td><td>4s (<code>PREAMBLE_INTERVAL_MS</code>)</td><td>Must exceed the ~3.9s playout so consecutive preambles never overlap themselves. Repetition is the loss-recovery mechanism: whichever burst lands after the bridge exists gets through.</td></tr>
+<tr><td>initiator window</td><td>20s (<code>INITIATOR_HANDSHAKE_TIMEOUT_MS</code>)</td><td>Dial ring time (up to several seconds, <code>timeout="30"</code> on the Dial itself) + preamble playout + responder's answering preamble + margin. Roughly 4 emit cycles.</td></tr>
+<tr><td>responder window</td><td>8s (<code>HANDSHAKE_TIMEOUT_MS</code>)</td><td>The responder's stream only exists once the bridge is already up, and an initiator's preamble lands within ~1–4.5s of that (first-or-second burst). 8s ≈ 2× worst case. It is also exactly how long a silent human waits before the greeting — the protocol tax on humans.</td></tr>
+</table>
+
+<h3>The happy-path sequence</h3>
+<pre>
+legA (initiator)                     bridge                    legB (responder)
+────────────────                     ──────                    ────────────────
+t0    stream opens
+t0.5  sendDTMF 9090&lt;NA&gt;#  ──✗ (no bridge yet, lost)
+t4.5  sendDTMF 9090&lt;NA&gt;#  ──────────────▶ dtmf events 9,0,9,0,…,#
+                                                         detector → NA
+                                                         fireEmit()
+      dtmf events 9,0,…,# ◀────────────── sendDTMF 9090&lt;NB&gt;#
+      detector → NB                                      succeed {NB is peer}
+      succeed {NA mine, NB peer}
+      → pairViaBroker({my:NA, peer:NB})                  → pairViaBroker({my:NB, peer:NA})
+</pre>
+
+<h2>PreambleDetector — the decoder</h2>
+<p>A deliberately dumb streaming matcher (<code>src/lib/dtmf.ts</code>):</p>
+<pre>
+feed(digit):
+  buffer += digit
+  if buffer.length &gt; 64: buffer = buffer.slice(-64)   // bound memory; 64 ≈ 2 overlapping bursts
+  m = /9090(\d{8})#/.exec(buffer)
+  if m: buffer = ''; return m[1]                       // reset → a repeated preamble re-detects
+  return null
+</pre>
+<p>Properties that matter:</p>
+<ul>
+<li><strong>Split-tolerant</strong>: digits arrive one per <code>dtmf</code> event; the buffer reassembles across events, so pacing/jitter is irrelevant.</li>
+<li><strong>Garbage-tolerant</strong>: leading/trailing junk digits don't matter; the regex finds the pattern anywhere in the window.</li>
+<li><strong>Self-filtering</strong>: the caller compares the detected nonce against <code>myNonce</code> — if some path echoes our own preamble back (a misbehaving bridge), we ignore it rather than "pairing with ourselves".</li>
+<li><strong>Duplicate-emission safe</strong>: Plivo occasionally double-fires a tone; the 64-char window plus reset-on-match keeps that harmless.</li>
+</ul>
+
+<h2>The twin-leg problem and dtmfBus</h2>
+<p>Plivo sometimes books <strong>two call_uuids for one PSTN leg</strong> and opens a Stream WS for each. Two consequences the code handles explicitly:</p>
+<ol>
+<li><strong>Only one handshake per number.</strong> <code>runStateMachine</code> takes a per-agent-number lock (<code>handshakeInProgress</code> Map). The twin's WS parks until close. Without this, both twins would handshake and then fight over the orchestrator claim.</li>
+<li><strong>DTMF may arrive on the "wrong" twin.</strong> Empirically the dtmf events fire on one specific twin — not necessarily the one holding the lock. Hence the <code>dtmfBus</code>: <em>every</em> twin's voiceHandler publishes every dtmf digit onto a per-number EventEmitter channel, and the (single) handshake subscribes to the <em>number</em>, not the socket. Fan-in solves the ambiguity.</li>
+</ol>
+<pre>
+twin WS #1 (lock holder) ── digits? ──▶ ┌────────────────┐
+                                        │ dtmfBus[number] │ ──▶ handshake detector
+twin WS #2 (parked)      ── digits? ──▶ └────────────────┘
+</pre>
+
+<h2>Failure-mode table</h2>
+<table>
+<tr><th>Scenario</th><th>What happens</th><th>Terminal state</th></tr>
+<tr><td>Peer is a human (silent)</td><td>Responder hears nothing for 8s → timeout → <code>null</code></td><td><code>runVoiceMode</code>: greet + STT/LLM/TTS loop</td></tr>
+<tr><td>We dialed a human (initiator, no AVIP peer)</td><td>Re-emits ×4 over 20s, no reply → <code>null</code>. The human heard a few beep bursts (initiators announce on purpose).</td><td><code>runVoiceMode</code> — the agent talks to the human it called</td></tr>
+<tr><td>Human mashes keypad</td><td>Digits enter the detector but must contain <code>9090\d{8}#</code> exactly; effectively impossible by accident</td><td>timeout → voice mode</td></tr>
+<tr><td>First initiator burst lost (bridge not up)</td><td>By design; 4s re-emit covers it</td><td>success, one cycle later</td></tr>
+<tr><td>A digit dropped mid-preamble</td><td>That burst never matches; the NEXT full burst does (initiator re-emits; responder re-answers because detector reset + <code>fireEmit</code> is idempotent per side)</td><td>success, delayed</td></tr>
+<tr><td>Both sides somehow emit simultaneously</td><td>Can't happen between AVIP legs (responders wait), but if a foreign implementation emits anyway: RFC 2833 events per leg don't acoustically collide the way raw tones would; each side still decodes the other</td><td>success</td></tr>
+<tr><td>WS closes mid-handshake</td><td><code>ws.once('close') → fail()</code>, timers cleaned up</td><td><code>null</code> → voiceHandler teardown</td></tr>
+<tr><td>Handshake OK, broker pair fails</td><td><code>pairViaBroker</code> returns null → log + REST hangup</td><td>call torn down (no zombie legs)</td></tr>
+<tr><td>Echoed own preamble</td><td><code>detected !== myNonce</code> check drops it</td><td>keeps listening</td></tr>
+</table>
+
+<h2>Security posture of this layer</h2>
+<p>The preamble is <em>audible and public</em> — anyone on the call path can hear both nonces. The handshake therefore only ever proves "someone on this call speaks AVIP". Session integrity comes from the next layer: the broker requires <em>cross-wise knowledge</em> (you must present the peer's nonce as well as your own), and with <code>AVIP_PAIR_SECRET</code> set, an HMAC that an eavesdropper without the deployment secret can't forge. See <a href="pairing-broker.html">Pairing &amp; Broker</a> for the exact construction and the residual gaps.</p>
+
+<p style="margin-top:2.5rem">Next: <a href="pairing-broker.html"><strong>Pairing &amp; Broker</strong></a>.</p>
+</main>
+</body>
+</html>

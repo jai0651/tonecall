@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Index</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem 1.2rem;margin:1rem 0}
+.card h3{margin:.1rem 0 .4rem}
+.card p{margin:.3rem 0}
+a{color:var(--accent)}
+.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:.05rem .6rem;font-size:.75rem;color:var(--muted);margin-left:.4rem}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+</style>
+</head>
+<body>
+<nav>
+<a class="here" href="index.html">Index</a>
+<a href="call-lifecycle.html">Call Lifecycle</a>
+<a href="handshake.html">Handshake</a>
+<a href="pairing-broker.html">Pairing &amp; Broker</a>
+<a href="audio-pipeline.html">Audio Pipeline</a>
+<a href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>Tonecall / AVIP-1 — the granular deep dive</h1>
+<p class="sub">How every moving part works, at the level of individual webhooks, WebSocket frames, timers, and Map entries. Written against the current (post-Conference) codebase.</p>
+
+<div class="note"><strong>Reading contract.</strong> Every claim on these pages maps to a file and usually a specific function. File paths are relative to the repo root. If a page and the code ever disagree, the code wins — update the page.</div>
+
+<h2>What this system is, in one paragraph</h2>
+<p>Tonecall is a middleware that sits between Plivo (the telephony provider) and OpenAI (LLM + STT + TTS). It answers phone calls on behalf of AI agents. When the thing on the other end of the call is <em>another AVIP agent</em>, the two sides recognise each other with a DTMF handshake played over the call itself, pair through a broker, and move the actual negotiation to a JSON WebSocket — keeping the voice line open for humans and for spoken bookends. When the other end is a human, the agent behaves like any phone AI: speech-to-text → LLM → text-to-speech.</p>
+
+<h2>The six-layer mental model</h2>
+<pre>
+┌────────────────────────────────────────────────────────────────────────┐
+│ 6. DASHBOARD      React app + SSE (/api/events). Pure observer.       │
+├────────────────────────────────────────────────────────────────────────┤
+│ 5. CONVERSATION   demoFlow.ts (centralized) / pairedMode.ts (solo).   │
+│                   LLM turns: voice intro → JSON exchange → goodbye.   │
+├────────────────────────────────────────────────────────────────────────┤
+│ 4. PAIRING        broker.ts nonce matching · pairAuth.ts HMAC ·       │
+│                   sessionRegistry orchestrator claim · /data relay.   │
+├────────────────────────────────────────────────────────────────────────┤
+│ 3. HANDSHAKE      stateMachine.ts: DTMF preamble 9090&lt;nonce&gt;#,        │
+│                   initiator/responder roles, human-fallback timeout.  │
+├────────────────────────────────────────────────────────────────────────┤
+│ 2. CALL TOPOLOGY  trigger-call → one originate; answer → role XML     │
+│                   (&lt;Stream&gt;+&lt;Dial&gt; or &lt;Stream&gt;+&lt;Wait&gt;); Dial bridge.  │
+├────────────────────────────────────────────────────────────────────────┤
+│ 1. TRANSPORT      Plivo Stream WS: 20ms μ-law frames + dtmf events    │
+│                   in; playAudio / sendDTMF out. server.ts routes it.  │
+└────────────────────────────────────────────────────────────────────────┘
+</pre>
+<p>Each page of this set owns one or two layers. The layers only talk through narrow interfaces: the topology layer hands the handshake a <em>role</em>; the handshake hands pairing a <em>nonce pair</em>; pairing hands the conversation a <em>sessionId</em>; the conversation only touches transport through <code>speak()</code> and the data WS.</p>
+
+<h2>The pages</h2>
+
+<div class="card">
+<h3><a href="call-lifecycle.html">1 · Call Lifecycle</a> <span class="pill">start here</span></h3>
+<p>A single agent↔agent call traced end-to-end with real payloads: the trigger POST, the originate, both answer webhooks and their exact XML, stream connection, handshake, pairing, conversation phases, hangup. Includes the timeline with expected timings and the human-caller variant.</p>
+</div>
+
+<div class="card">
+<h3><a href="handshake.html">2 · Handshake</a></h3>
+<p>The in-band DTMF protocol at symbol level: the <code>9090&lt;8-digit&gt;#</code> grammar and why each character is what it is, initiator/responder roles and their timers, the <code>PreambleDetector</code> buffer machine, the twin-call_uuid problem and the dtmfBus, and the full failure-mode table (human, packet loss, double preamble, simultaneous emit).</p>
+</div>
+
+<div class="card">
+<h3><a href="pairing-broker.html">3 · Pairing &amp; Broker</a></h3>
+<p>How two nonces become one session: the cross-wise matching algorithm and its data structures, the in-process vs HTTP submission paths, HMAC signing (exact payload string, replay window, constant-time compare), the orchestrator claim, and the byte-forwarding <code>/data</code> relay including its synthetic-bye close behaviour.</p>
+</div>
+
+<div class="card">
+<h3><a href="audio-pipeline.html">4 · Audio Pipeline</a></h3>
+<p>Every byte of audio: Plivo's Stream WS wire protocol (all event types, both directions, with JSON samples), G.711 μ-law encode/decode math, 160-byte/20ms framing, how <code>speak()</code> chunks TTS output, the 24kHz→8kHz resample chain, STT's silence-gated batching, and the human voice-mode loop.</p>
+</div>
+
+<div class="card">
+<h3><a href="federation.html">5 · Federation</a> <span class="pill">default demo</span></h3>
+<p>The two-middleware topology: who owns what, the full env matrix, how a call flows when each leg lands on a different process, solo paired-mode turn sequencing, dashboard event forwarding, both simulators (local and cross-instance), and the runbook for local + live-Plivo setups.</p>
+</div>
+
+<div class="card">
+<h3><a href="state-registries.html">6 · State &amp; Registries</a></h3>
+<p>All seven in-memory registries — what keys map to what values, who writes, who reads, TTLs, and the <code>globalThis</code> trick that keeps Next.js's module graph and the custom server sharing one copy. Plus what breaks on process restart.</p>
+</div>
+
+<h2>Component inventory</h2>
+<table>
+<tr><th>Concern</th><th>File</th><th>One-liner</th></tr>
+<tr><td rowspan="2">Process &amp; routing</td><td><code>server.ts</code></td><td>Custom HTTP server: Next.js handles HTTP; <code>ws</code> upgrades for <code>/voice/:callUuid</code> and <code>/data/:sessionId</code>.</td></tr>
+<tr><td><code>src/app/api/*</code></td><td>Next.js route handlers (webhooks, trigger, pair, simulators, SSE).</td></tr>
+<tr><td rowspan="3">Call topology</td><td><code>src/app/api/trigger-call/route.ts</code></td><td>One originate to the local agent's DID + pending-dial stash.</td></tr>
+<tr><td><code>src/app/api/answer/route.ts</code></td><td>Role decision (claim dial target) → role-specific XML.</td></tr>
+<tr><td><code>src/lib/answerXml.ts</code></td><td>Builds <code>&lt;Stream&gt;+&lt;Dial&gt;</code> / <code>&lt;Stream&gt;+&lt;Wait&gt;</code> responses.</td></tr>
+<tr><td rowspan="3">Handshake</td><td><code>src/ws/stateMachine.ts</code></td><td>Per-leg AVIP state machine: emit/listen preamble, pair, dispatch mode.</td></tr>
+<tr><td><code>src/lib/dtmf.ts</code></td><td>Preamble grammar, nonce generation, streaming detector.</td></tr>
+<tr><td><code>src/lib/dtmfBus.ts</code></td><td>Per-number DTMF fan-in (solves the twin-leg problem).</td></tr>
+<tr><td rowspan="4">Pairing</td><td><code>src/ws/broker.ts</code></td><td>Cross-wise nonce matcher; mints sessionIds.</td></tr>
+<tr><td><code>src/app/api/pair/route.ts</code></td><td>HTTP face of the broker; verifies HMAC.</td></tr>
+<tr><td><code>src/lib/pairAuth.ts</code></td><td>HMAC-SHA256 sign/verify with replay window.</td></tr>
+<tr><td><code>src/ws/dataHandler.ts</code> + <code>dataChannels.ts</code></td><td>Dumb byte relay between the two paired data WSes.</td></tr>
+<tr><td rowspan="3">Conversation</td><td><code>src/ws/demoFlow.ts</code></td><td>Centralized 4-phase orchestrator (single-process mode) + metrics.</td></tr>
+<tr><td><code>src/ws/pairedMode.ts</code></td><td>Federated per-leg flow: intro → JSON loop → goodbye → hangup.</td></tr>
+<tr><td><code>src/ws/voiceMode.ts</code></td><td>Human path: greet, then STT→LLM→TTS loop.</td></tr>
+<tr><td rowspan="5">Audio &amp; AI</td><td><code>src/lib/audio.ts</code></td><td>Plivo frame builders: playAudio, sendDTMF, chunking, silence.</td></tr>
+<tr><td><code>src/lib/audioCodec.ts</code></td><td>G.711 μ-law ↔ PCM16, resampling, WAV wrapping.</td></tr>
+<tr><td><code>src/lib/tts.ts</code> / <code>src/lib/stt.ts</code> / <code>src/lib/llm.ts</code></td><td>OpenAI wrappers, each with a stub twin behind <code>USE_STUBS</code>.</td></tr>
+<tr><td><code>src/ws/voiceTurn.ts</code></td><td><code>speak()</code>: TTS → chunked playAudio → duration-blocking.</td></tr>
+<tr><td><code>src/lib/plivo.ts</code></td><td>Plivo REST wrapper (originate, hangup, sendDigits, startStream), multi-account.</td></tr>
+<tr><td rowspan="2">State</td><td><code>src/lib/{call,dial,session}Registry.ts</code></td><td>callUuid→number, dial roles, sessionId→legs+orchestrator.</td></tr>
+<tr><td><code>src/lib/eventBus.ts</code></td><td>Demo pub/sub + optional cross-instance forwarding.</td></tr>
+<tr><td>Dev tooling</td><td><code>src/app/api/simulate*/…</code></td><td>Fake Plivo stream clients; local and cross-instance modes.</td></tr>
+</table>
+
+<h2>Glossary you need on every page</h2>
+<table>
+<tr><th>Term</th><th>Meaning here</th></tr>
+<tr><td><strong>DID</strong></td><td>A phone number we own on Plivo. Two agent DIDs (<code>PLIVO_NUMBER_A/B</code>) + one caller-ID DID.</td></tr>
+<tr><td><strong>leg</strong></td><td>One call between Plivo and an endpoint. An A↔B bridged call has two legs; each leg gets its own answer webhook, its own <code>callUuid</code>(s), and its own Stream WS.</td></tr>
+<tr><td><strong>twin</strong></td><td>Plivo sometimes books TWO call_uuids for one PSTN leg and opens a Stream WS for each. Dedup logic exists in three places (handshake lock, session registry, dial claim).</td></tr>
+<tr><td><strong>initiator / responder</strong></td><td>Handshake roles derived from topology: the leg that <code>&lt;Dial&gt;</code>ed out emits the preamble proactively; everyone else answers only after hearing one.</td></tr>
+<tr><td><strong>nonce</strong></td><td>8 random digits identifying one leg for one handshake. Proof of co-presence, not a secret.</td></tr>
+<tr><td><strong>sessionId</strong></td><td>16 hex chars minted by the broker when two nonce submissions cross-match. Names the <code>/data/:sessionId</code> relay.</td></tr>
+<tr><td><strong>inbound / outbound</strong> (audio)</td><td>Relative to a leg: inbound = audio arriving FROM the far side; outbound = audio we inject TOWARD the far side. Our Streams read inbound; <code>playAudio</code>/<code>sendDTMF</code> write outbound. Across a Dial bridge, one leg's outbound becomes the other leg's inbound — that's the whole trick.</td></tr>
+</table>
+
+<p style="margin-top:2.5rem">→ Start with <a href="call-lifecycle.html"><strong>Call Lifecycle</strong></a>.</p>
+</main>
+</body>
+</html>

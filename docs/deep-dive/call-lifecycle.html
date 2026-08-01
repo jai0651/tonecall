@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonecall Deep Dive — Call Lifecycle</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#ddd;--accent:#0a7d4f;--accent2:#8a4baf;--code-bg:#f5f5f4;--card:#fafaf9;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#e5e5e5;--muted:#999;--line:#333;--accent:#4ade80;--accent2:#c084fc;--code-bg:#1c1c1c;--card:#181818;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:.6rem 1.2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;z-index:9}
+nav a{color:var(--muted);text-decoration:none}
+nav a:hover{color:var(--accent)}
+nav a.here{color:var(--accent);font-weight:600}
+main{max-width:60rem;margin:0 auto;padding:2rem 1.2rem 5rem}
+h1{font-size:1.9rem;margin:.2rem 0 .4rem}
+h2{font-size:1.35rem;margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin-top:1.8rem}
+.sub{color:var(--muted);margin-top:0}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;font:.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);padding:1rem;border-radius:8px;overflow-x:auto;line-height:1.45;font-size:.8rem}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--line);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+a{color:var(--accent)}
+.note{border-left:3px solid var(--warn);padding:.5rem 1rem;background:var(--code-bg);border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+.step{border:1px solid var(--line);border-radius:10px;padding:1rem 1.2rem;margin:1.2rem 0;background:var(--card)}
+.step h3{margin:0 0 .5rem}
+.step .who{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+</style>
+</head>
+<body>
+<nav>
+<a href="index.html">Index</a>
+<a class="here" href="call-lifecycle.html">Call Lifecycle</a>
+<a href="handshake.html">Handshake</a>
+<a href="pairing-broker.html">Pairing &amp; Broker</a>
+<a href="audio-pipeline.html">Audio Pipeline</a>
+<a href="federation.html">Federation</a>
+<a href="state-registries.html">State &amp; Registries</a>
+</nav>
+<main>
+<h1>Call Lifecycle — one A↔A call, end to end</h1>
+<p class="sub">Single-middleware wording for brevity; the <a href="federation.html">Federation</a> page shows which steps move to the second process (spoiler: the flow is identical, only the webhook destinations differ).</p>
+
+<h2>The cast</h2>
+<pre>
+vegetable_vendor  = DID A (PLIVO_NUMBER_A), persona "Anil, Mumbai Fresh Produce"
+pizza_shop        = DID B (PLIVO_NUMBER_B), persona "Bella Pizza procurement"
+caller-ID DID     = PLIVO_CALLER_ID (only used as the `from` of the originate)
+middleware        = this Next.js + ws process, reachable at PUBLIC_HOST
+</pre>
+
+<h2>Timeline at a glance</h2>
+<pre>
+t≈0.0s   POST /api/trigger-call            (dashboard button)
+t≈0.1s   Plivo REST originate → DID A rings
+t≈1–2s   DID A answers → POST /api/answer  (leg A)  → XML: Stream + Dial B
+t≈2s     wss /voice/&lt;callA&gt; opens          (leg A stream live)
+t≈2.5s   leg A emits DTMF preamble #1      (usually lost — B still ringing)
+t≈3–6s   Dial connects → POST /api/answer  (leg B)  → XML: Stream + Wait
+t≈6s     wss /voice/&lt;callB&gt; opens          (bridge is now end-to-end)
+t≈6.5s   leg A re-emits preamble           (REEMIT_INTERVAL_MS = 4s cadence)
+t≈7–10s  B hears A's preamble → emits its own → both submit nonces
+t≈10s    broker matches → sessionId        (pairing done)
+t≈10s+   conversation phases (intro → JSON → goodbye)
+t≈40–80s REST hangup per leg → call.ended
+</pre>
+
+<div class="step"><span class="who">Dashboard → middleware</span>
+<h3>Step 1 — The trigger</h3>
+<p><code>Dashboard.tsx</code> POSTs <code>/api/trigger-call</code> with an empty JSON body. The route (<code>src/app/api/trigger-call/route.ts</code>) resolves:</p>
+<pre>numberA  = body.numberA ?? listAgentConfigs()[0].number ?? PLIVO_NUMBER_A   // must be OWNED locally
+numberB  = body.numberB ?? PLIVO_NUMBER_B                                   // may live anywhere
+callerId = body.callerId ?? PLIVO_CALLER_ID ?? numberA</pre>
+<p>Guard: if <code>getAgentConfig(numberA)</code> is undefined (this middleware doesn't own it — e.g. wrong instance in federated mode) → <code>400 numberA_not_owned</code>. Then two things happen, in order:</p>
+<ol>
+<li><code>setPendingDial(numberA, numberB)</code> — writes the intent "when numberA answers, Dial numberB" into the <a href="state-registries.html">dialRegistry</a> (60s TTL).</li>
+<li><code>plivoClient.originate({from: callerId, to: numberA, answerUrl, accountId:'1'})</code> — ONE outbound call. The <code>answerUrl</code> parameter is passed but effectively ignored: when the destination of an originate is a same-account DID with an Application attached, Plivo runs the <em>Application's</em> answer URL instead.</li>
+</ol>
+<p>Response to the dashboard: <code>{ok, mode:'dial_bridge', originator:{to, dialTarget, requestUuid}}</code>. A <code>call.triggered</code> event goes out on the eventBus.</p>
+</div>
+
+<div class="step"><span class="who">Plivo → middleware (leg A)</span>
+<h3>Step 2 — Answer webhook, initiator leg</h3>
+<p>DID A "answers" (its Application does), and Plivo POSTs form-encoded data to <code>/api/answer</code>:</p>
+<pre>CallUUID=aaaa-1111-…   From=+1CCCCCCCCCC (caller-ID)   To=+1AAAAAAAAAA (DID A)   …</pre>
+<p>The handler (<code>src/app/api/answer/route.ts</code>) walks through:</p>
+<ol>
+<li><strong>Number normalization</strong> — bare digits get a <code>+</code> prefix so registry keys are stable.</li>
+<li><strong>Agent identification</strong> — try <code>getAgentConfig(to)</code> first (inbound direction), then <code>getAgentConfig(from)</code> (outbound direction). Here <code>to</code> = DID A → agent <code>vegetable_vendor</code>. Neither matches → 404 (call to a number we don't run).</li>
+<li><strong><code>registerCall(callUuid, agentNumber)</code></strong> — so the voice WS (which only knows the callUuid from its URL) can find the agent later.</li>
+<li><strong>Role decision</strong> — <code>claimDialTarget(agentNumber, callUuid)</code>. The pending dial from step 1 exists and is unclaimed → this callUuid claims it, gets back <code>numberB</code>, and is recorded as <code>initiator</code>. (A webhook <em>retry</em> with the same callUuid gets the same answer — idempotent. A <em>twin</em> callUuid for the same number gets <code>null</code> — no second Dial, ever.)</li>
+<li><strong>XML</strong> — <code>buildAnswerXml({role:'dial_originator', …})</code>:</li>
+</ol>
+<pre>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;Response&gt;
+&lt;Stream keepCallAlive="true" bidirectional="true" audioTrack="inbound"
+        contentType="audio/x-mulaw;rate=8000"&gt;wss://PUBLIC_HOST/voice/aaaa-1111-…&lt;/Stream&gt;
+&lt;Dial timeout="30" callerId="+1AAAAAAAAAA"&gt;&lt;Number&gt;+1BBBBBBBBBB&lt;/Number&gt;&lt;/Dial&gt;
+&lt;/Response&gt;</pre>
+<p>Order matters: <code>&lt;Stream&gt;</code> executes first so our WS is attached <em>before</em> the Dial starts ringing B — we must be listening before the bridge exists. The Dial's <code>callerId</code> is DID A itself, so leg B's webhook sees <code>From=+1AAAAAAAAAA</code>: a stable, meaningful identity.</p>
+</div>
+
+<div class="step"><span class="who">Plivo → middleware (leg B)</span>
+<h3>Step 3 — Answer webhook, responder leg</h3>
+<p>The <code>&lt;Dial&gt;</code> rings DID B. DID B's Application fires <em>its</em> answer URL (same route in single-middleware mode; the peer middleware in federation):</p>
+<pre>CallUUID=bbbb-2222-…   From=+1AAAAAAAAAA   To=+1BBBBBBBBBB</pre>
+<p>Same handler, but now <code>claimDialTarget</code> returns <code>null</code> (no pending dial for DID B) → role <code>callee</code>:</p>
+<pre>&lt;Response&gt;
+&lt;Stream keepCallAlive="true" bidirectional="true" audioTrack="inbound"
+        contentType="audio/x-mulaw;rate=8000"&gt;wss://PUBLIC_HOST/voice/bbbb-2222-…&lt;/Stream&gt;
+&lt;Wait length="600"/&gt;
+&lt;/Response&gt;</pre>
+<p>The <code>&lt;Wait&gt;</code> is the load-bearing fix: the hackathon build returned <code>&lt;Conference&gt;</code> here, which yanked the leg into a mixer and broke the Dial bridge (the historical "same-account Dial hits Ring Timeout" mystery). With <code>&lt;Wait&gt;</code>, answering completes the Dial and Plivo bridges the legs: <strong>leg A's outbound audio is now leg B's inbound audio, and vice versa</strong>. A human dialing DID B directly gets this exact same XML — the callee leg makes no assumptions about who's calling.</p>
+</div>
+
+<div class="step"><span class="who">Plivo → middleware (both legs)</span>
+<h3>Step 4 — Voice WebSockets connect</h3>
+<p><code>server.ts</code> catches the HTTP upgrade, matches <code>/^\/voice\/([^/]+)$/</code>, and hands the socket to <code>handleVoiceConnection(ws, callUuid)</code> (<code>src/ws/voiceHandler.ts</code>), which per leg:</p>
+<ol>
+<li>Polls <code>lookupNumberForCall(callUuid)</code> for up to 1s (the webhook and the WS race; the webhook usually wins but not always).</li>
+<li>Resolves the <code>AgentConfig</code>; publishes <code>handshake.started</code>.</li>
+<li>Installs the message tap: <code>dtmf</code> events → <code>dtmfBus.publish(number, digit, callUuid)</code>; <code>media</code> events → optional debug capture (<code>AVIP_CAPTURE=1</code>) / live playback (<code>AVIP_PLAY=1</code>).</li>
+<li>Calls <code>runStateMachine({ws, callUuid, config})</code> and, when it returns, unregisters the call, clears the dial role, closes the WS, publishes <code>call.ended</code>.</li>
+</ol>
+</div>
+
+<div class="step"><span class="who">middleware (per leg)</span>
+<h3>Step 5 — Handshake</h3>
+<p>Covered in full on the <a href="handshake.html">Handshake page</a>. Summary: <code>getDialRole(callUuid)</code> says leg A is <code>initiator</code> (20s window, emits <code>9090&lt;nonceA&gt;#</code> at 0.5s then every 4s) and leg B is <code>responder</code> (8s window, silent until it hears a preamble, then answers with <code>9090&lt;nonceB&gt;#</code>). Each side ends up holding <code>{myNonce, peerNonce}</code> — or <code>null</code> on timeout, which routes to <code>runVoiceMode</code> (the human path, step 9).</p>
+</div>
+
+<div class="step"><span class="who">middleware ↔ broker</span>
+<h3>Step 6 — Pairing</h3>
+<p>Covered on the <a href="pairing-broker.html">Pairing page</a>. Each leg submits <code>{callUuid, myNonce, peerNonce, agentNumber}</code> — in-process if <code>BROKER_URL</code> is unset, HMAC-signed HTTP POST to <code>/api/pair</code> otherwise. Cross-matching submissions mint one 16-hex <code>sessionId</code>; both submitters get it. Events: <code>call.mode=agent_to_agent</code>, <code>handshake.peer_detected</code>, <code>handshake.paired</code>, <code>pairing.summary(path=in_band_nonce)</code>.</p>
+</div>
+
+<div class="step"><span class="who">middleware (per leg)</span>
+<h3>Step 7 — Who drives the conversation?</h3>
+<p>Each leg calls <code>registerSessionLeg(sessionId, leg)</code>. Duplicate agent number in the same session (a twin that slipped through) → not registered → parks on <code>waitForDemoComplete</code>. Then exactly one leg wins <code>claimOrchestrator(sessionId, callUuid)</code> (a plain null-check-then-set; single-threaded JS makes it atomic) and checks: does the session have 2 local legs within 1.5s?</p>
+<table>
+<tr><th>Both legs local?</th><th>Path</th><th>Meaning</th></tr>
+<tr><td>yes</td><td><code>runDemoFlow</code> (demoFlow.ts)</td><td>Single-process mode: one orchestrator scripts BOTH sides — 4 phases with wall-clock metrics.</td></tr>
+<tr><td>no</td><td><code>runSoloPairedMode</code> (pairedMode.ts)</td><td>Federated: this process drives only its own leg; the peer middleware drives the other. See <a href="federation.html">Federation</a>.</td></tr>
+</table>
+</div>
+
+<div class="step"><span class="who">middleware → both legs + broker</span>
+<h3>Step 8 — The conversation (centralized flavor)</h3>
+<p><code>runDemoFlow</code> phases, each wrapped in <code>timePhase()</code> which publishes <code>phase.started</code>/<code>phase.ended</code>:</p>
+<ol>
+<li><strong>voice_intro</strong> — up to 4 alternating turns. Per turn, <code>llm.respondVoiceTurn()</code> returns <code>{speak, wantsToSwitch}</code>; the line is spoken on the speaker's leg via <a href="audio-pipeline.html"><code>speak()</code></a>. Loop exits early once BOTH sides have said <code>wantsToSwitch=true</code>.</li>
+<li><strong>data_exchange</strong> — the orchestrator opens <em>two client WSes</em> to <code>/data/&lt;sessionId&gt;</code> (one per agent), seeds history with the voice transcript as a pseudo-<code>reply</code>, sends both <code>hello</code>s, then alternates <code>llm.respondJson()</code> turns (max 6, 30s deadline) until a <code>bye</code>. It force-sends <code>bye</code> on both WSes if the loop ended without one, so the relay closes cleanly.</li>
+<li><strong>voice_goodbye</strong> — per leg, <code>llm.respondText()</code> over the full transcript → one spoken farewell sentence (hardcoded fallback only if the LLM call throws).</li>
+<li><strong>hangup</strong> — <code>plivoClient.hangup()</code> per leg via REST; <code>&lt;Wait&gt;</code>/keepCallAlive would otherwise hold the legs open. Finally <code>publishSummary()</code> computes the cost/latency panel (voice baseline = dataTurns × observed voice sec/turn) and <code>signalDemoComplete</code> releases any parked legs.</li>
+</ol>
+</div>
+
+<div class="step"><span class="who">variant</span>
+<h3>Step 9 — The human variant</h3>
+<p>A human dials DID A or B directly. Steps 3–4 run unchanged (callee XML, WS opens, responder role). The handshake hears no preamble for 8s — and because responders never emit first, <strong>the human hears no beeps</strong>. On timeout: <code>call.mode=human_to_agent</code>, <code>handshake.timeout</code>, then <code>runVoiceMode</code>:</p>
+<pre>greet (persona-fixed line, e.g. "Hi, this is Anil from Mumbai Fresh Produce…")
+loop: media frames → stt.feed() buffers until ~1.4s speech + 500ms silence
+      → whisper transcript → llm.respondText(persona, history) → tts → speak
+until WS closes or Plivo sends event:"stop" → REST hangup</pre>
+<p>The pre-Dial-topology build had a bug here worth remembering: every inbound call computed a deterministic conference name, so the state machine waited 15s for a conference peer, failed, and <em>hung up on the human</em>. The current fallback is timeout → greet.</p>
+</div>
+
+<h2>Event stream a successful A↔A call produces</h2>
+<pre>call.triggered → handshake.started (×2 legs) → call.mode(agent_to_agent) (×2)
+→ handshake.peer_detected (×2) → handshake.paired → pairing.summary (×2)
+→ phase.started(voice_intro) → voice.transcript… → phase.ended
+→ phase.started(data_exchange) → agent.message… → phase.ended
+→ phase.started(voice_goodbye) → voice.transcript… → phase.ended
+→ demo.summary → call.ended (×2)</pre>
+<p>All of it flows through <code>eventBus.publishDemo</code> → the SSE route <code>/api/events</code> → <code>Dashboard.tsx</code> (and, in federation, is also POSTed to the leader's <code>/api/forward-event</code>).</p>
+
+<p style="margin-top:2.5rem">Next: <a href="handshake.html"><strong>Handshake</strong></a> — the DTMF layer in symbol-level detail.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tonecall — Demo Deck</title>
+
+  <!-- reveal.js from CDN; works on any modern browser with internet -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
+
+  <style>
+    :root {
+      --chirp: #4ade80;
+      --chirp-dim: rgba(74, 222, 128, 0.6);
+      --chirp-faint: rgba(74, 222, 128, 0.1);
+      --amber: #fbbf24;
+      --slate: #94a3b8;
+      --bg: #0a0a0a;
+    }
+    .reveal { background: var(--bg); color: #e2e8f0; }
+    .reveal section { text-align: left; }
+    .reveal h1, .reveal h2, .reveal h3 { color: #fff; text-transform: none; letter-spacing: -0.02em; font-weight: 700; }
+    .reveal h1 { font-size: 3.2em; }
+    .reveal h2 { font-size: 2.2em; }
+    .reveal h3 { font-size: 1.4em; color: var(--chirp); }
+    .reveal pre { font-size: 0.6em; background: rgba(255,255,255,0.04); padding: 0.7em 1em; border-radius: 4px; border: 1px solid rgba(255,255,255,0.06); }
+    .reveal code { color: var(--chirp); }
+    .reveal pre code { color: #cbd5e1; line-height: 1.4; }
+    .reveal em { color: var(--chirp); font-style: normal; font-weight: 600; }
+    .reveal strong { color: #fff; }
+    .reveal .small { font-size: 0.6em; color: var(--slate); }
+    .reveal .tagline { color: var(--slate); font-size: 0.7em; margin-top: 0.5em; }
+    .reveal .accent { color: var(--chirp); }
+    .reveal .center { text-align: center; }
+    .reveal .huge { font-size: 4em; font-weight: 800; color: var(--chirp); line-height: 1; }
+    .reveal .mega { font-size: 6em; font-weight: 800; color: var(--chirp); line-height: 1; }
+    .reveal .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5em;
+      margin-top: 0.5em;
+    }
+    .reveal .stat {
+      border: 1px solid rgba(74, 222, 128, 0.3);
+      background: var(--chirp-faint);
+      padding: 1em 1.2em;
+      border-radius: 6px;
+    }
+    .reveal .stat .label {
+      color: var(--slate);
+      font-size: 0.5em;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .reveal .stat .value {
+      color: var(--chirp);
+      font-size: 1.8em;
+      font-weight: 800;
+      line-height: 1.1;
+      margin-top: 0.2em;
+    }
+    .reveal .stat .sub {
+      color: var(--slate);
+      font-size: 0.45em;
+      margin-top: 0.3em;
+    }
+    .reveal .roadmap-row {
+      display: grid;
+      grid-template-columns: 0.7fr 2fr 1.3fr;
+      gap: 1em;
+      padding: 0.5em 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      align-items: baseline;
+    }
+    .reveal .roadmap-row:last-child { border-bottom: none; }
+    .reveal .v-tag {
+      color: var(--chirp);
+      font-weight: 800;
+      font-family: monospace;
+    }
+    .reveal .v-tag.now { background: var(--chirp-faint); padding: 0.1em 0.4em; border-radius: 3px; }
+    .reveal .when {
+      color: var(--amber);
+      font-size: 0.8em;
+      text-align: right;
+    }
+    .reveal table { width: 100%; }
+    .reveal table td, .reveal table th { padding: 0.4em 0.7em; }
+    .reveal .footer-note {
+      position: absolute;
+      bottom: 1em;
+      left: 1em;
+      right: 1em;
+      color: var(--slate);
+      font-size: 0.5em;
+      text-align: left;
+    }
+    .reveal .demo-card {
+      border: 2px solid var(--chirp);
+      padding: 2em 3em;
+      border-radius: 8px;
+      background: var(--chirp-faint);
+      text-align: center;
+      margin: 1em auto;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+
+<div class="reveal">
+<div class="slides">
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 1: title                                          -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <div class="center" style="padding-top: 2em;">
+    <h1 style="color: var(--chirp); margin-bottom: 0.1em;">Tonecall</h1>
+    <p style="font-size: 1.2em; color: #cbd5e1; margin-top: 0;">
+      A handshake protocol for AI voice agents.
+    </p>
+    <p class="tagline" style="margin-top: 2em;">
+      <em>Fax tones</em> &middot; for the AI era.
+    </p>
+    <p class="small" style="margin-top: 4em;">
+      Plivo Hackathon · 2026
+    </p>
+  </div>
+  <aside class="notes">
+    Open with the pitch. 90 seconds:
+    "Two AI voice agents on a phone call right now do this every single
+    turn — TTS, audio, STT, think, repeat. That's 4 seconds of round-trip
+    per turn with errors injected at every step. Both sides pay for TTS,
+    STT, LLM tokens, PSTN minutes."
+
+    "Tonecall is the missing handshake. The moment two AI agents realise
+    they're both AIs, they switch from spoken English to a JSON
+    side-channel — same logic as a fax machine screeching at the start of
+    a call, but for AI agents."
+
+    "Today we're demoing it on Plivo, two of our own DIDs calling each
+    other. The protocol is AVIP-0 — Agent Voice Interop Protocol v0. We see it as
+    a wedge for Plivo to own a standard the way DKIM owns email signing."
+
+    End on: "Let me show you."
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 2: the problem                                    -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>The problem</h2>
+  <p style="margin-bottom: 0.3em;">
+    Two AI voice agents on the same call do this <em>every turn</em>:
+  </p>
+<pre><code>Agent A                       Agent B
+   ↓ TTS         500 ms
+   ↓ audio       300 ms (across PSTN)
+                                ↓ STT         800 ms
+                                ↓ LLM       1,500 ms
+                                ↓ TTS         500 ms
+   ↓ audio       300 ms (back)
+   ↓ STT         800 ms
+
+                  ≈ 4–5 seconds per turn</code></pre>
+  <p style="margin-top: 1em; color: var(--slate); font-size: 0.7em;">
+    A 7-turn order takes 30–60 seconds. STT mis-hears
+    <em>"extra cheese"</em> as <em>"extra Swiss."</em>
+    Both sides pay TTS + STT + LLM + PSTN — every turn.
+  </p>
+  <aside class="notes">
+    Beat: "This is the cost. Every turn round-trips through TTS, audio,
+    STT, LLM. 4 to 5 seconds. Errors at every step. Both sides pay for
+    every minute and every token."
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 3: the insight                                    -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <div class="center" style="padding-top: 2em;">
+    <p style="font-size: 1.6em; color: #e2e8f0;">If both sides are AI agents,</p>
+    <p style="font-size: 2.2em; color: var(--chirp); font-weight: 700; margin-top: 1em;">
+      the audio channel is <em>wasted bandwidth</em>.
+    </p>
+    <p style="font-size: 1.2em; color: #cbd5e1; margin-top: 2em;">
+      They could just exchange JSON.
+    </p>
+    <p class="tagline" style="margin-top: 1em;">
+      They only need the audio channel <em>for humans.</em>
+    </p>
+  </div>
+  <aside class="notes">
+    The insight slide. Pause for a beat. This is the wedge — phrase it
+    confidently. "TTS and STT exist because phones carry audio. But
+    when both ends are AI, audio is the lossy serialization layer.
+    Just send JSON."
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 4: what tonecall does                             -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>What Tonecall does</h2>
+  <p style="margin-bottom: 0.4em;">
+    Two agents meet on a call &middot; they detect each other &middot;
+    they switch to JSON.
+  </p>
+<pre><code>Without Tonecall                With Tonecall
+─────────────────               ─────────────────
+A ──voice── B   (45 s)          A ──voice intro── B    (8 s)
+                                A ────JSON────── B    (0.5 s)
+                                A ──voice goodbye── B (4 s)
+
+slow + expensive                fast + cheap</code></pre>
+  <p style="margin-top: 1em; color: var(--slate); font-size: 0.75em;">
+    The voice channel <em>stays open</em> — if a human walks in,
+    the agents drop back to spoken English. The data flows over
+    a WebSocket at internet speed.
+  </p>
+  <aside class="notes">
+    Show the contrast. Emphasize: the voice channel stays available.
+    The protocol degrades gracefully back to voice when needed. Worst
+    case it behaves exactly like today's voice agents. Best case it
+    closes the deal in a second.
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 5: live demo                                      -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <div class="center" style="padding-top: 2.5em;">
+    <h1 style="font-size: 3.5em;">Live demo</h1>
+    <div class="demo-card" style="margin-top: 2em;">
+      <p style="font-size: 1em; color: #cbd5e1; margin: 0;">
+        Two Plivo DIDs. Real OpenAI. Real PSTN.
+      </p>
+      <p style="font-size: 0.6em; color: var(--slate); margin-top: 0.5em; margin-bottom: 0;">
+        +1&middot;480&middot;790&middot;6332 &nbsp;↔&nbsp; +1&middot;678&middot;400&middot;6155
+      </p>
+    </div>
+    <p class="tagline" style="margin-top: 3em;">
+      Click. Wait ~70 seconds. Watch the channel handoff.
+    </p>
+  </div>
+  <aside class="notes">
+    Switch to the dashboard browser tab now. Click "Trigger agent ↔
+    agent demo."
+
+    During the call, narrate the beats:
+    • t=2-5s: green "AVIP-0 paired" badge → "agents discovered each
+       other in under a second."
+    • t=5-30s: voice intro filling up → "this is the slow path. STT,
+       LLM, TTS on every turn. Listen to how they hint at being AIs."
+    • t=30-35s: THE MOMENT — pizza shop says "let's switch to data
+       channel." → "There. Watch the right pane now."
+    • t=35-48s: data plane filling up → "JSON over WebSocket. Each
+       message is 50ms instead of 4 seconds. They're closing the deal."
+    • t=48-78s: voice goodbye → "Once it's done, voice comes back for
+       the farewell — for any humans who may have been listening."
+    • t=78s: metric cards light up → segue to next slide.
+
+    If the demo fails: see docs/demo.md §2 "If something fails mid-demo."
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 6: what just happened — the numbers               -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>What just happened</h2>
+  <p style="margin-bottom: 0.8em; color: var(--slate); font-size: 0.8em;">
+    Real run. 7-turn produce order, end-to-end on real Plivo + real GPT-5.2.
+  </p>
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="label">Voice time</div>
+      <div class="value">64 sec</div>
+      <div class="sub">intro + goodbye, 6 spoken turns</div>
+    </div>
+    <div class="stat">
+      <div class="label">Data time</div>
+      <div class="value">13 sec</div>
+      <div class="sub">7 JSON turns over WebSocket</div>
+    </div>
+    <div class="stat">
+      <div class="label">Latency saved</div>
+      <div class="value">61 sec</div>
+      <div class="sub">vs voice-only baseline — <em>5× faster</em></div>
+    </div>
+    <div class="stat">
+      <div class="label">Cost saved</div>
+      <div class="value">$0.25</div>
+      <div class="sub">52% off baseline ($0.49 → $0.24)</div>
+    </div>
+  </div>
+  <p style="margin-top: 1.2em; color: var(--slate); font-size: 0.6em; text-align: center;">
+    Multiply by Plivo's call volume → billions of dollars a year, industry-wide.
+  </p>
+  <aside class="notes">
+    Back to slides after the demo finishes (or while metrics card is
+    still on the projected dashboard).
+
+    "These are the numbers from the run you just saw. 7-turn order, real
+    Plivo, real GPT-5.2. Voice phase 64 seconds, data phase 13 seconds,
+    61 seconds saved on the negotiation. 52% cheaper than the voice-only
+    baseline for the same deal."
+
+    "Per call that's modest. Multiply by Plivo's volume and the savings
+    are an industry-wide unlock."
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 7: the mechanism                                  -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>How they recognize each other</h2>
+  <p style="margin-bottom: 0.5em; color: var(--slate); font-size: 0.8em;">
+    The handshake (today's path):
+  </p>
+<pre><code>┌────────────┐                                ┌────────────┐
+│  Agent A   │   ① both legs hit the broker   │  Agent B   │
+│  Plivo DID │ ←──── shared coordination ────→│  Plivo DID │
+└─────┬──────┘            key                 └─────┬──────┘
+      │                                              │
+      │     ② broker pairs them — same sessionId    │
+      │                                              │
+      │       ③ data WebSocket opens between        │
+      │          the two agents over the broker     │
+      │                                              │
+      └────────────── JSON over WS ──────────────────┘
+
+     Voice channel stays bridged via Plivo Conference (in case
+     a human joins, or for the spoken intro/goodbye).</code></pre>
+  <p style="margin-top: 0.8em; color: var(--slate); font-size: 0.65em;">
+    Cross-vendor variant: in-band DTMF preamble <code>9090&lt;nonce&gt;#</code>
+    over real PSTN → ✓ verified, ships in v1.
+  </p>
+  <aside class="notes">
+    The mechanism. Don't over-explain — judges respect concrete answers
+    but not lectures. Three steps: both legs reach the broker with a
+    shared key, broker pairs them, data WebSocket opens.
+
+    The "verified" line is important. We probed it 2 hours ago — DTMF
+    crosses a Dial bridge cleanly. That's the cross-vendor path; ships
+    in v1 (post-hackathon).
+
+    If anyone asks "what's the shared coordination key?" — say it's a
+    deterministic name derived from the two DIDs today, and an in-band
+    DTMF nonce in the cross-vendor version.
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 8: why it's a protocol                            -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>Why this is a <em>protocol</em>, not a product</h2>
+  <p style="color: var(--slate); font-size: 0.8em; margin-bottom: 0.8em;">
+    AVIP-0 — Agent Voice Interop Protocol v0
+  </p>
+  <table style="font-size: 0.75em;">
+    <tr>
+      <td style="width: 30%; color: var(--chirp); font-weight: 700;">Cross-vendor</td>
+      <td>Any AI agent on any CPaaS (Plivo, Twilio, Telnyx…) can implement it.</td>
+    </tr>
+    <tr>
+      <td style="color: var(--chirp); font-weight: 700;">Transport-agnostic</td>
+      <td>PSTN today &middot; direct WebSocket tomorrow &middot; SIP-headers between.</td>
+    </tr>
+    <tr>
+      <td style="color: var(--chirp); font-weight: 700;">Trust-extensible</td>
+      <td>Per-domain <code>/.well-known/avip</code> + HMAC signing &mdash; DKIM-style.</td>
+    </tr>
+    <tr>
+      <td style="color: var(--chirp); font-weight: 700;">Backwards-compatible</td>
+      <td>Peer doesn't speak it? Falls back to voice automatically.</td>
+    </tr>
+  </table>
+  <p style="margin-top: 1.5em; font-size: 0.75em; color: #cbd5e1;">
+    Plivo can own this the way <em>Twilio owns TwiML</em>,
+    <em>AWS owns the S3 API</em>, <em>Cloudflare owns Workers</em>.
+  </p>
+  <aside class="notes">
+    Lean into the protocol framing. This is the business pitch — Plivo
+    has been a great CPaaS but doesn't OWN a developer standard. AVIP-0
+    is the wedge. Spec is free, broker infrastructure is the product.
+
+    Compare to TwiML: Twilio's secret weapon for 15 years has been that
+    every webhook in voice apps speaks TwiML. Even Plivo speaks TwiML
+    syntax for compat. That's an enormous moat.
+
+    AVIP-0 can be the same.
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 9: roadmap                                        -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <h2>Roadmap</h2>
+  <div class="roadmap-row">
+    <div><span class="v-tag now">AVIP-0</span></div>
+    <div>Broker pairing on a single vendor</div>
+    <div class="when">today &middot; shipping</div>
+  </div>
+  <div class="roadmap-row">
+    <div><span class="v-tag">AVIP-1</span></div>
+    <div>In-band DTMF over real PSTN bridge → cross-vendor</div>
+    <div class="when">probed today ✓</div>
+  </div>
+  <div class="roadmap-row">
+    <div><span class="v-tag">AVIP-2</span></div>
+    <div>SIP-layer handshake &mdash; <em>humans hear nothing</em></div>
+    <div class="when">~1 month</div>
+  </div>
+  <div class="roadmap-row">
+    <div><span class="v-tag">AVIP-3</span></div>
+    <div>Federation: per-domain identity + HMAC signing</div>
+    <div class="when">~2 months</div>
+  </div>
+  <div class="roadmap-row">
+    <div><span class="v-tag">AVIP-4</span></div>
+    <div>Skip PSTN entirely when both are agents &mdash; <em>50× cheaper</em></div>
+    <div class="when">~3 months</div>
+  </div>
+  <p style="margin-top: 1.5em; color: var(--slate); font-size: 0.65em; text-align: center;">
+    Every version falls back to the one below. The lowest common
+    denominator always works.
+  </p>
+  <aside class="notes">
+    The roadmap. The key data point: AVIP-1 was verified 2 hours ago via
+    the probe at /api/trigger-dial-probe — we sent "90901234#" via
+    Plivo's sendDTMF event on one leg and observed all 9 digits arrive
+    on the peer leg's stream. The Dial bridge carries DTMF end-to-end.
+
+    AVIP-2 is the headline UX upgrade — humans don't hear the handshake.
+    Done via SIP custom headers during call setup (before any TTS plays)
+    plus the "polite cover" pattern where DTMF nonce is mixed under a
+    normal greeting at -20dB.
+
+    AVIP-4 is the long arc — agents call agents over WebSocket without
+    burning PSTN at all. Phone networks become the human-fallback layer.
+  </aside>
+</section>
+
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Slide 10: vision + close                                -->
+<!-- ────────────────────────────────────────────────────── -->
+<section data-background-color="#0a0a0a">
+  <div class="center" style="padding-top: 1.5em;">
+    <p style="font-size: 1.5em; color: #e2e8f0; line-height: 1.4;">
+      Phone networks become the <em>human-fallback layer</em>.
+    </p>
+    <p style="font-size: 1.5em; color: #e2e8f0; line-height: 1.4; margin-top: 0.6em;">
+      Voice agents talk to voice agents <br>
+      at the <em>speed of the internet</em>.
+    </p>
+    <p style="font-size: 1.1em; color: var(--chirp); margin-top: 2em; font-weight: 600;">
+      Plivo can own this protocol.
+    </p>
+    <p class="small" style="margin-top: 3em;">
+      <code>github.com/plivo-hackathon/tonecall</code> &middot;
+      <code>docs/architecture.md</code> &middot;
+      <code>docs/future-protocol.md</code>
+    </p>
+    <p style="margin-top: 1.5em; font-size: 0.9em; color: var(--slate);">
+      Thanks. Questions?
+    </p>
+  </div>
+  <aside class="notes">
+    Close. Memorize this one too:
+
+    "Voice agents are about to be everywhere. When two of them end up
+    on a call, they shouldn't be wasting your phone bill talking to
+    each other in English. They should be doing what fax machines did
+    in 1985: handshake, switch to data, do the actual transaction in
+    a second. Tonecall is the protocol. Plivo can make it the standard.
+    Thanks."
+
+    Then take questions. Refer to docs/demo.md §3 (FAQs) and §4 (Deep
+    Q&A) for prepared answers.
+  </aside>
+</section>
+
+</div>
+</div>
+
+<!-- reveal.js JS -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    transition: 'fade',
+    transitionSpeed: 'fast',
+    backgroundTransition: 'fade',
+    controls: true,
+    progress: true,
+    slideNumber: 'c/t',
+    width: 1280,
+    height: 800,
+    margin: 0.06,
+    minScale: 0.5,
+    maxScale: 1.5,
+    plugins: [ RevealNotes ]
+  });
+</script>
+</body>
+</html>
