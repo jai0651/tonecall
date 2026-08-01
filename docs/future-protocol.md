@@ -13,7 +13,7 @@ discrete deliverable that ships value on its own.
 
 **Today (AVIP-0):**
 
-- Works on Plivo same-account only (uses Conference + middleware
+- Works on Provider A same-account only (uses Conference + middleware
   coordination as the pairing signal).
 - Discovery happens *during* the call by the agents speaking out loud:
   *"Hi, this is X."* / *"Sounds like we're both AIs — switching to data."*
@@ -21,8 +21,8 @@ discrete deliverable that ships value on its own.
   happening.
 - No identity verification — anyone who hits `/api/pair` with matching
   nonces gets paired.
-- Each `<Stream>` is bidirectional with `audioTrack="inbound"` — a Plivo
-  constraint that blocks in-band audio signaling across a Conference
+- Each `<Stream>` is bidirectional with `audioTrack="inbound"` — a
+  provider constraint that blocks in-band audio signaling across a Conference
   mixer (see architecture doc §5).
 
 **What we actually want:**
@@ -32,7 +32,7 @@ discrete deliverable that ships value on its own.
    anything a human would think to mention.
 2. **Any AI agent on any vendor recognises any other AI agent.**
    Cross-vendor, cross-account, by-spec. Not "we both happen to be
-   running on Plivo with the same broker URL."
+   running on Provider A with the same broker URL."
 3. **No waste.** When the handshake succeeds, the slow voice channel
    ramps down to silence (or never goes up). Audio comes back only if
    it needs to.
@@ -77,12 +77,12 @@ The pairing only works because both legs land on our middleware.
 ## AVIP-1 — Cross-vendor compatible (next milestone)
 
 **Goal:** make the in-band DTMF nonce path actually work on real PSTN
-bridges, so an agent on Plivo can pair with an agent on Twilio /
-Telnyx / Vonage without those vendors knowing about each other.
+bridges, so an agent on Provider A can pair with an agent on Provider B /
+Provider C / Provider D without those vendors knowing about each other.
 
 The code already exists (`src/lib/dtmf.ts` + `runInBandNonceHandshake`
 in `src/ws/stateMachine.ts`); it just isn't exercised by real calls
-because Plivo same-account routes through `<Conference>` and the
+because Provider A same-account routes through `<Conference>` and the
 conference mixer eats the DTMF (architecture doc §5). On a direct
 PSTN bridge between two unrelated CPaaS endpoints, there's no mixer —
 DTMF sent on one end's outbound arrives on the other end's inbound
@@ -124,7 +124,7 @@ all the time. But it's not invisible.
 
 **What this unlocks:**
 
-- A Plivo agent talks to a Twilio agent and they pair.
+- An agent on Provider A talks to an agent on Provider B and they pair.
 - A real human keypad on the call would also be seen as DTMF, but
   random key presses won't hit `9090<8-digit>#`, so no false-positive
   pairing.
@@ -153,8 +153,8 @@ together as defence-in-depth.
 
 `<Stream>` and the dtmf events are *audio-plane* things. But SIP — the
 signaling protocol that sets the call up — has space for arbitrary
-custom headers. Both Plivo and Twilio expose these (`extraHeaders` on
-Plivo's Dial / Stream; `X-Twilio-*` on Twilio).
+custom headers. Both Provider A and Provider B expose these (`extraHeaders` on
+Provider A's Dial / Stream; `X-Twilio-*`-style vendor headers on Provider B).
 
 **The idea:** the moment our agent answers the call, before any TTS
 plays, we attach a SIP header to our leg:
@@ -451,7 +451,7 @@ month each. The first three give us a real protocol. The rest are the
 These are real engineering decisions we don't have answers for yet:
 
 1. **Who hosts the well-known endpoint for a number that doesn't have a
-   domain?** (i.e., a Twilio DID with no public website behind it.)
+   domain?** (i.e., a CPaaS-provider DID with no public website behind it.)
    Probably a CPaaS-hosted resolver: each CPaaS publishes a wildcard
    `well-known/avip` for all its DIDs.
 

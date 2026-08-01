@@ -34,8 +34,8 @@ both write into the same broker:
 
 | Surface | Signal | Where it works |
 |---|---|---|
-| **A — Shared coordination key** | Both legs land on the same middleware, both share a key derived from `(from, to)` | Today's demo on Plivo single-account |
-| **B — In-band DTMF nonce** | Each agent plays `9090<8-digit-nonce>#` as DTMF via Plivo's `sendDTMF` event; peer hears it as `dtmf` events on its stream | Cross-vendor PSTN bridge; verified by the dial probe; ships in v1 |
+| **A — Shared coordination key** | Both legs land on the same middleware, both share a key derived from `(from, to)` | Today's demo on Provider A single-account |
+| **B — In-band DTMF nonce** | Each agent plays `9090<8-digit-nonce>#` as DTMF via Provider A's `sendDTMF` event; peer hears it as `dtmf` events on its stream | Cross-vendor PSTN bridge; verified by the dial probe; ships in v1 |
 
 Both surfaces produce the same outcome (a shared `sessionId`) — the
 agents downstream don't know or care which surface fired.
@@ -153,12 +153,12 @@ different ways as the protocol matures.
 
 - **Detection:** each agent plays `9090<nonce>#` as DTMF. Peer hears it
   on its stream's `dtmf` events. Works on `<Dial>` bridges, including
-  cross-vendor PSTN (Plivo ↔ Twilio, Plivo ↔ Telnyx, etc.).
+  cross-vendor PSTN (Provider A ↔ Provider B, Provider A ↔ Provider C, etc.).
 - **What a human hears:** ~3 seconds of beeps at call start (could be
   mistaken for "the system is connecting"), then normal voice agent or
   pleasantries.
 - **Verified:** the `/api/trigger-dial-probe` test sent `90901234#`
-  via Plivo's `sendDTMF` event on one leg and observed **all 9 digits**
+  via Provider A's `sendDTMF` event on one leg and observed **all 9 digits**
   arriving on the peer leg's stream. Cross-leg DTMF crosses a Dial
   bridge intact.
 
@@ -238,7 +238,7 @@ Three escalating depths. Pick the one that matches the question.
 > demo), surface B second (in-band DTMF nonce, cross-vendor portable,
 > verified by today's probe), and falls through to `runVoiceMode` on
 > timeout. The 15-second window is long enough for the slowest
-> expected handshake — DTMF preamble takes ~3 seconds to play, Plivo's
+> expected handshake — DTMF preamble takes ~3 seconds to play, Provider A's
 > RFC 2833 events surface in ~50ms, broker matching adds ~500ms — so
 > 15 seconds is 3× the worst-case AI path. False positives on humans
 > are bounded by the regex strictness (`9090\d{8}#`) and the collision

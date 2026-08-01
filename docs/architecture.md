@@ -70,28 +70,27 @@ the audio.
 
 ### 1.3 CPaaS = "phone APIs as a service"
 
-You don't want to build your own PSTN. **CPaaS** companies (Plivo,
-Twilio, Telnyx, etc.) buy and operate the boring phone-system stuff and
-expose it as REST APIs.
+You don't want to build your own PSTN. **CPaaS** companies buy and
+operate the boring phone-system stuff and expose it as REST APIs.
 
-When this codebase talks to **Plivo**, what we get is:
+When this codebase talks to **our CPaaS provider**, what we get is:
 - A phone number we own (called a **DID**).
 - An API to make outbound calls (`POST /Call/`).
 - An API to manipulate live calls (hang up, play audio, send DTMF, etc.).
-- A way for Plivo to call our webhook when something happens (someone
-  dialed our number, the call ended, etc.).
+- A way for the provider to call our webhook when something happens
+  (someone dialed our number, the call ended, etc.).
 
-We never touch SIP/RTP directly. Plivo does that for us.
+We never touch SIP/RTP directly. The CPaaS provider does that for us.
 
 ### 1.4 The answer URL
 
-When somebody dials one of our DIDs, Plivo answers the call and then
-asks our server: "what do I do with this call?" by HTTP-POSTing to a URL
-we configured in advance — the **answer URL**.
+When somebody dials one of our DIDs, the provider answers the call and
+then asks our server: "what do I do with this call?" by HTTP-POSTing to
+a URL we configured in advance — the **answer URL**.
 
-Our server responds with a tiny XML document called **Plivo XML**
-(similar to Twilio's TwiML). That XML tells Plivo what to do next.
-Some example XML verbs:
+Our server responds with a tiny XML document (the provider's
+call-control XML dialect, similar in spirit to Twilio's TwiML). That
+XML tells the provider what to do next. Some example XML verbs:
 
 | Verb | What it does |
 |---|---|
@@ -116,23 +115,24 @@ This is the magic primitive that makes this whole project possible.
 </Stream>
 ```
 
-When Plivo executes that XML, it opens a WebSocket to our server. Over
-that WebSocket:
+When the provider executes that XML, it opens a WebSocket to our server.
+Over that WebSocket:
 
-- **Plivo → us**: JSON events. Every ~20ms we get a `media` event with a
-  base64-encoded 160-byte chunk of audio (μ-law 8 kHz, the standard phone
-  codec). We also get `dtmf` events when the caller presses a key, and
-  `start` / `stop` events for the connection lifecycle.
-- **us → Plivo**: more JSON. We can send `playAudio` to push audio onto
+- **Provider → us**: JSON events. Every ~20ms we get a `media` event with
+  a base64-encoded 160-byte chunk of audio (μ-law 8 kHz, the standard
+  phone codec). We also get `dtmf` events when the caller presses a key,
+  and `start` / `stop` events for the connection lifecycle.
+- **us → provider**: more JSON. We can send `playAudio` to push audio onto
   the call (this is how our AI agent speaks), `clearAudio` to interrupt
   what's currently playing, `sendDTMF` to inject touch-tones, and
   `checkpoint` to mark a position in the playback queue.
 
-So a `<Stream>` is a full-duplex audio pipe between Plivo and us, in JSON.
+So a `<Stream>` is a full-duplex audio pipe between the provider and us,
+in JSON.
 
 **Important constraint** (this matters for §5): if `bidirectional="true"`,
 then `audioTrack` MUST be `inbound`. The other combinations are rejected
-by Plivo. We can read what the OTHER side of the call is sending us, and
+by the provider. We can read what the OTHER side of the call is sending us, and
 we can write audio "as us" — that's it. We can't read our own outbound.
 
 ### 1.6 DTMF — touch-tone signaling
@@ -153,9 +153,9 @@ DTMF can travel two ways:
 - **Out-of-band (RFC 2833)**: the DTMF event travels alongside the audio
   as a special signaling event. Most modern carriers use this.
 
-Plivo's `<Stream>` surfaces DTMF as `dtmf` JSON events (not as audio),
-and our `sendDTMF` event injects DTMF the same way. We never have to
-think about which transport mechanism is being used underneath.
+The provider's `<Stream>` surfaces DTMF as `dtmf` JSON events (not as
+audio), and our `sendDTMF` event injects DTMF the same way. We never
+have to think about which transport mechanism is being used underneath.
 
 ### 1.7 `<Conference>` — the virtual meeting room
 
@@ -170,8 +170,8 @@ group video call but audio-only.
 </Conference>
 ```
 
-The implementation is a **server-side audio mixer** running inside Plivo:
-it takes each leg's incoming audio, mixes everyone-except-you into a
+The implementation is a **server-side audio mixer** running inside the
+provider's infrastructure: it takes each leg's incoming audio, mixes everyone-except-you into a
 single stream, and sends that mix back to each leg.
 
 **Crucial subtlety** (matters for §5): the mixer reads each leg's
@@ -190,7 +190,7 @@ broker state instead of in-band signals.
 
 ```
         ┌──────────────────────────────────────────────────────┐
-        │                    Plivo (cloud)                     │
+        │                CPaaS provider (cloud)                │
         │                                                       │
         │   +1AAAAAAAAAA            +1BBBBBBBBBB               │
         │   (vegetable_vendor)      (pizza_shop)               │
@@ -207,13 +207,13 @@ broker state instead of in-band signals.
      │     Tonecall middleware (this Next.js app)              │
      │                                                          │
      │  HTTP:                          WebSocket:               │
-     │    /api/answer       (Plivo's   /voice/:callUuid         │
+     │    /api/answer       (provider  /voice/:callUuid         │
      │    /api/hangup        webhooks)  /data/:sessionId        │
      │    /api/stream-status                                    │
      │    /api/trigger-call (UI button)                         │
      │    /api/events       (SSE → dashboard)                   │
      │    /api/pair         (broker pairing)                    │
-     │    /api/simulate     (dev-only no-Plivo dry run)         │
+     │    /api/simulate     (dev-only no-provider dry run)      │
      │                                                          │
      │  Brains:                                                 │
      │    src/lib/llm.ts      → OpenAI (GPT-5.2)                │
@@ -239,7 +239,7 @@ broker state instead of in-band signals.
 
 Six things in the picture:
 
-1. **Plivo cloud** — owns the two DIDs, runs the actual phone call.
+1. **CPaaS provider cloud** — owns the two DIDs, runs the actual phone call.
 2. **Our middleware** — Next.js app + custom server, all on one process.
 3. **OpenAI** — provides LLM (gpt-5.2), STT (whisper-1), TTS (tts-1).
 4. **The dashboard** — React app served by Next.js, shows live metrics.
@@ -270,21 +270,22 @@ conferenceName = "tonecall-1AAAAAAAAAA-1BBBBBBBBBB"
 setPendingConference(NUMBER_A, conferenceName)
 setPendingConference(NUMBER_B, conferenceName)
 
-// Tell Plivo to dial both numbers from our caller-ID DID
+// Tell the CPaaS provider to dial both numbers from our caller-ID DID
 plivoClient.originate(from=callerId, to=NUMBER_A, answerUrl=...)
 plivoClient.originate(from=callerId, to=NUMBER_B, answerUrl=...)
 ```
 
-Plivo accepts both originate requests and returns a `requestUuid` for
-each. Two outbound calls are now ringing.
+The provider accepts both originate requests and returns a `requestUuid`
+for each. Two outbound calls are now ringing.
 
-Why two outbound originates? Because Plivo can't ring two DIDs and bridge
-them in a single call directly — we need to ring each one and bring them
-together. Conference is how we bring them together (Step 4).
+Why two outbound originates? Because the provider can't ring two DIDs
+and bridge them in a single call directly — we need to ring each one
+and bring them together. Conference is how we bring them together
+(Step 4).
 
-### Step 3 — Both DIDs answer, Plivo POSTs `/api/answer` for each leg
+### Step 3 — Both DIDs answer, the provider POSTs `/api/answer` for each leg
 
-Plivo says: "the call to +1AAAAAAAAAA was just answered. What do I do?"
+The provider says: "the call to +1AAAAAAAAAA was just answered. What do I do?"
 Our `/api/answer` handler responds with this XML:
 
 ```xml
@@ -304,13 +305,13 @@ Our `/api/answer` handler responds with this XML:
 
 Two directives, executed in order:
 
-- `<Stream>` — Plivo opens a WebSocket to our server at
+- `<Stream>` — the provider opens a WebSocket to our server at
   `/voice/<callUuid>`. Audio starts flowing both ways immediately.
-- `<Conference>` — Plivo joins this leg into the named conference room.
+- `<Conference>` — the provider joins this leg into the named conference room.
 
 When the same XML returns for both legs (using the same conference name),
 both legs end up mixed together in the room. Audio that one leg sends
-reaches the other leg via Plivo's mixer. Both legs also have their own
+reaches the other leg via the provider's mixer. Both legs also have their own
 WebSocket to us.
 
 ### Step 4 — `/voice/:callUuid` WebSocket connects, voiceHandler runs
@@ -322,7 +323,7 @@ WebSocket to us.
    represents (race-safe — `/api/answer` runs first and registers it).
 2. Optionally tee inbound audio to a debug file (`AVIP_CAPTURE=1`) or a
    local `play` subprocess (`AVIP_PLAY=1`).
-3. Forward Plivo's `dtmf` events to a per-number bus (only the in-band
+3. Forward the provider's `dtmf` events to a per-number bus (only the in-band
    nonce handshake listens — irrelevant on conference-paired calls).
 4. Hand the WS to the state machine.
 
@@ -333,7 +334,7 @@ ways evidence can reach the broker that says "these two legs belong
 together":
 
 **Surface A — shared-coordination key** (the path that fires on real
-Plivo demos):
+provider demos):
 
 We stashed `conferenceName` for both numbers during `/api/trigger-call`.
 The state machine reads it back with `getConferenceForCall(callUuid)`,
@@ -346,8 +347,8 @@ both resolve with a fresh `sessionId`.
 simulator and would fire on cross-vendor PSTN bridges):
 
 If no conference binding is present, the state machine generates an
-8-digit random nonce and plays `9090<nonce>#` as DTMF using Plivo's
-`sendDTMF` event over the WebSocket. The peer leg's voice handler picks
+8-digit random nonce and plays `9090<nonce>#` as DTMF using the
+provider's `sendDTMF` event over the WebSocket. The peer leg's voice handler picks
 up its own `dtmf` events and routes them to the dtmf bus. The state
 machine's `PreambleDetector` watches for a peer nonce (`9090<8>#` that
 isn't ours), then POSTs to `/api/pair` with `{myNonce, peerNonce}`. The
@@ -358,14 +359,14 @@ doesn't know or care which surface fired.
 
 | Topology | Has conference key? | Surface used | Status |
 |---|---|---|---|
-| Plivo → Plivo via `<Conference>` (this demo) | yes | A · shared key | Working |
+| Provider → same provider via `<Conference>` (this demo) | yes | A · shared key | Working |
 | `/api/simulate` (local dry run) | no (intentionally omitted) | B · in-band nonce | Working |
-| Plivo → other vendor over PSTN | no | B · in-band nonce | Untested, expected to work |
+| Provider → other vendor over PSTN | no | B · in-band nonce | Untested, expected to work |
 | Real human dials our number | no | times out → human voice mode | Working |
 
 ### Step 6 — Both legs register with sessionRegistry; one wins orchestrator
 
-Both legs call `registerSessionLeg(sessionId, leg)`. Plivo gives us
+Both legs call `registerSessionLeg(sessionId, leg)`. The provider gives us
 duplicate WSes per leg sometimes (bookkeeping twins of the same call), so
 the registry dedupes by agent number — first WS per number wins, the
 twin parks.
@@ -407,7 +408,7 @@ the demo finishes.
 │    speak() it onto that leg's WS.                               │
 │                                                                  │
 │  Phase 4 — HANGUP                                               │
-│    Plivo hangup REST per leg. Conference auto-tears down        │
+│    Provider hangup REST per leg. Conference auto-tears down     │
 │    because both participants left (endConferenceOnExit=true).   │
 │                                                                  │
 │  Throughout, the orchestrator publishes events on eventBus:     │
@@ -460,7 +461,7 @@ You can dial either DID from your own phone. There's no
    Data plane empty.
 
 The human path shares everything with the agent-to-agent path *except*
-the pairing step and the orchestrator. It's the same Plivo, same
+the pairing step and the orchestrator. It's the same CPaaS provider, same
 `<Stream>`, same agent persona, same voice — just with STT in the loop
 because the peer isn't speaking JSON.
 
@@ -473,14 +474,14 @@ agent plays its identity as audio (a DTMF preamble, or a custom
 ultrasonic-ish tone), the peer hears it on its own stream, both POST to
 the broker, done. Cross-vendor portable, no shared infra.
 
-**It doesn't work on Plivo Conference.** Three pieces have to be true
-simultaneously, and on Plivo they aren't:
+**It doesn't work on this provider's Conference.** Three pieces have to
+be true simultaneously, and on this provider they aren't:
 
 1. Audio we inject onto leg A needs to reach leg B's stream.
 2. We need `<Stream bidirectional="true">` so we can play TTS.
 3. The bidirectional stream forces `audioTrack="inbound"`.
 
-(3) is the Plivo platform constraint we can't change. With (3) fixed,
+(3) is the provider platform constraint we can't change. With (3) fixed,
 our stream only sees leg's INBOUND audio (what's coming FROM the leg's
 side). And `playAudio` puts our injected audio on the leg's OUTBOUND
 (what we send TO the leg). So leg A's playAudio shows up on leg A's
@@ -490,7 +491,7 @@ A's playAudio either, so leg B never gets it either.
 
 ```
                   ┌────────────────────────┐
-   leg-A inbound ─┤    Plivo conference    ├─→ leg-A outbound
+   leg-A inbound ─┤   provider conference  ├─→ leg-A outbound
                   │      audio mixer       │
    leg-B inbound ─┤                        ├─→ leg-B outbound
                   └────────────────────────┘
@@ -500,8 +501,8 @@ A's playAudio either, so leg B never gets it either.
    (leg-A outbound — never read by mixer)
 ```
 
-That's why same-account Plivo demos use the conference key as the
-pairing signal: we pre-coordinate via shared middleware state, since
+That's why same-account demos on this provider use the conference key as
+the pairing signal: we pre-coordinate via shared middleware state, since
 in-band audio can't carry the signal across the mixer.
 
 The in-band nonce code is still there for cross-vendor PSTN bridges
@@ -568,7 +569,7 @@ costSavedUsd     = $0.252      ← ~52% saved
   immediately knows what's going on. The roadmap doc covers how to make
   this invisible — see `docs/future-protocol.md`.
 
-- **Single-account Plivo only.** Cross-vendor / cross-account would need
+- **Single-account (same provider) only.** Cross-vendor / cross-account would need
   Surface B (in-band nonce) to actually work over a direct PSTN bridge.
   It's coded and works in simulator, but not real-PSTN tested.
 
@@ -603,11 +604,11 @@ costSavedUsd     = $0.252      ← ~52% saved
 | Dashboard React app | `src/app/page.tsx` + `src/app/components/Dashboard.tsx` |
 | SSE event stream → dashboard | `src/app/api/events/route.ts` |
 | Trigger button endpoint | `src/app/api/trigger-call/route.ts` |
-| Plivo answer URL | `src/app/api/answer/route.ts` |
-| Plivo hangup webhook | `src/app/api/hangup/route.ts` |
-| Plivo stream status callback | `src/app/api/stream-status/route.ts` |
+| CPaaS answer URL | `src/app/api/answer/route.ts` |
+| CPaaS hangup webhook | `src/app/api/hangup/route.ts` |
+| CPaaS stream status callback | `src/app/api/stream-status/route.ts` |
 | Broker pair endpoint | `src/app/api/pair/route.ts` |
-| Local simulator (no Plivo cost) | `src/app/api/simulate/route.ts` |
+| Local simulator (no CPaaS cost) | `src/app/api/simulate/route.ts` |
 | Cross-middleware federation hooks | `src/app/api/peer-notify/route.ts`, `src/app/api/forward-event/route.ts` |
 | Debug DTMF probe | `src/app/api/debug-dtmf/route.ts` |
 | Voice WS lifecycle | `src/ws/voiceHandler.ts` |
@@ -621,13 +622,13 @@ costSavedUsd     = $0.252      ← ~52% saved
 | `/data` peer map | `src/ws/dataChannels.ts` |
 | AVIP-0 preamble grammar + detector | `src/lib/dtmf.ts` |
 | DTMF event bus | `src/lib/dtmfBus.ts` |
-| Plivo REST wrapper | `src/lib/plivo.ts` |
+| CPaaS REST wrapper | `src/lib/plivo.ts` |
 | Broker URL resolver | `src/lib/brokerUrl.ts` |
 | Per-agent persona + voice + prompt | `src/lib/agentConfigs.ts` |
 | LLM wrapper (gpt-5.2 + JSON mode) | `src/lib/llm.ts` |
 | STT (Whisper, chunked) | `src/lib/stt.ts` |
 | TTS (tts-1, PCM → mu-law, WAV recording) | `src/lib/tts.ts` |
-| Plivo frame helpers | `src/lib/audio.ts` |
+| CPaaS frame helpers | `src/lib/audio.ts` |
 | mu-law / PCM codec | `src/lib/audioCodec.ts` |
 | Number → pending conference | `src/lib/conferenceRegistry.ts` |
 | CallUuid → agent number | `src/lib/callRegistry.ts` |
@@ -674,15 +675,15 @@ costSavedUsd     = $0.252      ← ~52% saved
 - **RFC 2833** — out-of-band DTMF; tones travel as signaling events
   instead of in the audio.
 - **codec** — audio compression. μ-law 8kHz is the standard for PSTN.
-- **CPaaS** — Communications Platform as a Service; companies (Plivo,
-  Twilio) that own phone numbers and expose them as APIs.
+- **CPaaS** — Communications Platform as a Service; companies that own
+  phone numbers and expose them as APIs.
 - **DID** — Direct Inward Dial; a phone number you own through a CPaaS.
-- **CallUUID** — Plivo's unique identifier for a single call leg.
-- **`<Stream>`** — Plivo XML verb that taps the call's audio into your
-  WebSocket.
-- **`<Conference>`** — Plivo XML verb that puts a leg into a virtual
-  audio meeting room.
-- **answer URL** — the webhook Plivo POSTs to when a DID picks up.
+- **CallUUID** — the CPaaS provider's unique identifier for a single call leg.
+- **`<Stream>`** — provider call-control XML verb that taps the call's
+  audio into your WebSocket.
+- **`<Conference>`** — provider call-control XML verb that puts a leg
+  into a virtual audio meeting room.
+- **answer URL** — the webhook the provider POSTs to when a DID picks up.
 - **HMAC** — keyed hash; proves you hold a secret without revealing it.
 - **WebSocket** — a long-lived bidirectional TCP socket carrying JSON
   messages, used here for both audio (`/voice`) and data (`/data`).

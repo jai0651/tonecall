@@ -49,7 +49,7 @@ a{color:var(--accent)}
 <div class="note"><strong>Reading contract.</strong> Every claim on these pages maps to a file and usually a specific function. File paths are relative to the repo root. If a page and the code ever disagree, the code wins — update the page.</div>
 
 <h2>What this system is, in one paragraph</h2>
-<p>Tonecall is a middleware that sits between Plivo (the telephony provider) and OpenAI (LLM + STT + TTS). It answers phone calls on behalf of AI agents. When the thing on the other end of the call is <em>another AVIP agent</em>, the two sides recognise each other with a DTMF handshake played over the call itself, pair through a broker, and move the actual negotiation to a JSON WebSocket — keeping the voice line open for humans and for spoken bookends. When the other end is a human, the agent behaves like any phone AI: speech-to-text → LLM → text-to-speech.</p>
+<p>Tonecall is a middleware that sits between your CPaaS provider (telephony) and OpenAI (LLM + STT + TTS). It answers phone calls on behalf of AI agents. When the thing on the other end of the call is <em>another AVIP agent</em>, the two sides recognise each other with a DTMF handshake played over the call itself, pair through a broker, and move the actual negotiation to a JSON WebSocket — keeping the voice line open for humans and for spoken bookends. When the other end is a human, the agent behaves like any phone AI: speech-to-text → LLM → text-to-speech.</p>
 
 <h2>The six-layer mental model</h2>
 <pre>
@@ -68,7 +68,7 @@ a{color:var(--accent)}
 │ 2. CALL TOPOLOGY  trigger-call → one originate; answer → role XML     │
 │                   (&lt;Stream&gt;+&lt;Dial&gt; or &lt;Stream&gt;+&lt;Wait&gt;); Dial bridge.  │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 1. TRANSPORT      Plivo Stream WS: 20ms μ-law frames + dtmf events    │
+│ 1. TRANSPORT      Provider Stream WS: 20ms μ-law frames + dtmf events │
 │                   in; playAudio / sendDTMF out. server.ts routes it.  │
 └────────────────────────────────────────────────────────────────────────┘
 </pre>
@@ -93,12 +93,12 @@ a{color:var(--accent)}
 
 <div class="card">
 <h3><a href="audio-pipeline.html">4 · Audio Pipeline</a></h3>
-<p>Every byte of audio: Plivo's Stream WS wire protocol (all event types, both directions, with JSON samples), G.711 μ-law encode/decode math, 160-byte/20ms framing, how <code>speak()</code> chunks TTS output, the 24kHz→8kHz resample chain, STT's silence-gated batching, and the human voice-mode loop.</p>
+<p>Every byte of audio: the provider's Stream WS wire protocol (all event types, both directions, with JSON samples), G.711 μ-law encode/decode math, 160-byte/20ms framing, how <code>speak()</code> chunks TTS output, the 24kHz→8kHz resample chain, STT's silence-gated batching, and the human voice-mode loop.</p>
 </div>
 
 <div class="card">
 <h3><a href="federation.html">5 · Federation</a> <span class="pill">default demo</span></h3>
-<p>The two-middleware topology: who owns what, the full env matrix, how a call flows when each leg lands on a different process, solo paired-mode turn sequencing, dashboard event forwarding, both simulators (local and cross-instance), and the runbook for local + live-Plivo setups.</p>
+<p>The two-middleware topology: who owns what, the full env matrix, how a call flows when each leg lands on a different process, solo paired-mode turn sequencing, dashboard event forwarding, both simulators (local and cross-instance), and the runbook for local + live-provider setups.</p>
 </div>
 
 <div class="card">
@@ -124,22 +124,22 @@ a{color:var(--accent)}
 <tr><td rowspan="3">Conversation</td><td><code>src/ws/demoFlow.ts</code></td><td>Centralized 4-phase orchestrator (single-process mode) + metrics.</td></tr>
 <tr><td><code>src/ws/pairedMode.ts</code></td><td>Federated per-leg flow: intro → JSON loop → goodbye → hangup.</td></tr>
 <tr><td><code>src/ws/voiceMode.ts</code></td><td>Human path: greet, then STT→LLM→TTS loop.</td></tr>
-<tr><td rowspan="5">Audio &amp; AI</td><td><code>src/lib/audio.ts</code></td><td>Plivo frame builders: playAudio, sendDTMF, chunking, silence.</td></tr>
+<tr><td rowspan="5">Audio &amp; AI</td><td><code>src/lib/audio.ts</code></td><td>Provider frame builders: playAudio, sendDTMF, chunking, silence.</td></tr>
 <tr><td><code>src/lib/audioCodec.ts</code></td><td>G.711 μ-law ↔ PCM16, resampling, WAV wrapping.</td></tr>
 <tr><td><code>src/lib/tts.ts</code> / <code>src/lib/stt.ts</code> / <code>src/lib/llm.ts</code></td><td>OpenAI wrappers, each with a stub twin behind <code>USE_STUBS</code>.</td></tr>
 <tr><td><code>src/ws/voiceTurn.ts</code></td><td><code>speak()</code>: TTS → chunked playAudio → duration-blocking.</td></tr>
-<tr><td><code>src/lib/plivo.ts</code></td><td>Plivo REST wrapper (originate, hangup, sendDigits, startStream), multi-account.</td></tr>
+<tr><td><code>src/lib/plivo.ts</code></td><td>CPaaS REST wrapper (originate, hangup, sendDigits, startStream), multi-account.</td></tr>
 <tr><td rowspan="2">State</td><td><code>src/lib/{call,dial,session}Registry.ts</code></td><td>callUuid→number, dial roles, sessionId→legs+orchestrator.</td></tr>
 <tr><td><code>src/lib/eventBus.ts</code></td><td>Demo pub/sub + optional cross-instance forwarding.</td></tr>
-<tr><td>Dev tooling</td><td><code>src/app/api/simulate*/…</code></td><td>Fake Plivo stream clients; local and cross-instance modes.</td></tr>
+<tr><td>Dev tooling</td><td><code>src/app/api/simulate*/…</code></td><td>Fake provider stream clients; local and cross-instance modes.</td></tr>
 </table>
 
 <h2>Glossary you need on every page</h2>
 <table>
 <tr><th>Term</th><th>Meaning here</th></tr>
-<tr><td><strong>DID</strong></td><td>A phone number we own on Plivo. Two agent DIDs (<code>PLIVO_NUMBER_A/B</code>) + one caller-ID DID.</td></tr>
-<tr><td><strong>leg</strong></td><td>One call between Plivo and an endpoint. An A↔B bridged call has two legs; each leg gets its own answer webhook, its own <code>callUuid</code>(s), and its own Stream WS.</td></tr>
-<tr><td><strong>twin</strong></td><td>Plivo sometimes books TWO call_uuids for one PSTN leg and opens a Stream WS for each. Dedup logic exists in three places (handshake lock, session registry, dial claim).</td></tr>
+<tr><td><strong>DID</strong></td><td>A phone number we own on our CPaaS provider. Two agent DIDs (<code>PLIVO_NUMBER_A/B</code>) + one caller-ID DID.</td></tr>
+<tr><td><strong>leg</strong></td><td>One call between the provider and an endpoint. An A↔B bridged call has two legs; each leg gets its own answer webhook, its own <code>callUuid</code>(s), and its own Stream WS.</td></tr>
+<tr><td><strong>twin</strong></td><td>The provider sometimes books TWO call_uuids for one PSTN leg and opens a Stream WS for each. Dedup logic exists in three places (handshake lock, session registry, dial claim).</td></tr>
 <tr><td><strong>initiator / responder</strong></td><td>Handshake roles derived from topology: the leg that <code>&lt;Dial&gt;</code>ed out emits the preamble proactively; everyone else answers only after hearing one.</td></tr>
 <tr><td><strong>nonce</strong></td><td>8 random digits identifying one leg for one handshake. Proof of co-presence, not a secret.</td></tr>
 <tr><td><strong>sessionId</strong></td><td>16 hex chars minted by the broker when two nonce submissions cross-match. Names the <code>/data/:sessionId</code> relay.</td></tr>

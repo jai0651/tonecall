@@ -43,7 +43,7 @@ a{color:var(--accent)}
 <p class="sub">Files: <code>src/lib/dtmf.ts</code> (grammar + detector), <code>src/ws/stateMachine.ts</code> (<code>runInBandNonceHandshake</code>), <code>src/lib/dtmfBus.ts</code>, <code>src/lib/dialRegistry.ts</code> (roles).</p>
 
 <h2>Why DTMF at all</h2>
-<p>The handshake signal must survive whatever sits between two arbitrary phone endpoints: codecs, carriers, transcoding, cross-vendor bridges. DTMF (the touch-tone signal) is the one thing the entire phone network has treated as sacred for 50 years — IVRs depend on it, so every hop either passes the tones through or re-encodes them as RFC 2833 signaling events. Plivo surfaces received DTMF as clean JSON <code>dtmf</code> events on the Stream WS, and lets us inject it with a <code>sendDTMF</code> WS event. We never touch raw tones.</p>
+<p>The handshake signal must survive whatever sits between two arbitrary phone endpoints: codecs, carriers, transcoding, cross-vendor bridges. DTMF (the touch-tone signal) is the one thing the entire phone network has treated as sacred for 50 years — IVRs depend on it, so every hop either passes the tones through or re-encodes them as RFC 2833 signaling events. The provider surfaces received DTMF as clean JSON <code>dtmf</code> events on the Stream WS, and lets us inject it with a <code>sendDTMF</code> WS event. We never touch raw tones.</p>
 
 <h2>The grammar</h2>
 <pre>
@@ -54,7 +54,7 @@ full example:   9 0 9 0 6 1 0 4 5 1 0 0 #     (13 DTMF symbols)
 </pre>
 <table>
 <tr><th>Part</th><th>Why exactly this</th></tr>
-<tr><td><code>9090</code></td><td>Protocol magic + version marker. Digits only — Plivo's DTMF detector drops <code>*</code> more often than digits, so the classic "*-prefixed" style was rejected. Chosen to be something no human dials as the first thing on a call.</td></tr>
+<tr><td><code>9090</code></td><td>Protocol magic + version marker. Digits only — the provider's DTMF detector drops <code>*</code> more often than digits, so the classic "*-prefixed" style was rejected. Chosen to be something no human dials as the first thing on a call.</td></tr>
 <tr><td>8-digit nonce</td><td>Identifies <em>this leg for this handshake</em>. 10<sup>8</sup> space → a human randomly mashing a keypad has a 10<sup>-8</sup> chance of forging a specific valid nonce, and would additionally need the 9090 prefix and the # terminator around it. Generated with <code>Math.random()</code> deliberately: nonces prove <em>co-presence on the call</em>, not identity — identity is the HMAC layer at <a href="pairing-broker.html">pairing</a>.</td></tr>
 <tr><td><code>#</code></td><td>End marker, reliably detected across PSTN equipment. Lets the detector know the nonce is complete without length-prefix tricks.</td></tr>
 </table>
@@ -126,11 +126,11 @@ feed(digit):
 <li><strong>Split-tolerant</strong>: digits arrive one per <code>dtmf</code> event; the buffer reassembles across events, so pacing/jitter is irrelevant.</li>
 <li><strong>Garbage-tolerant</strong>: leading/trailing junk digits don't matter; the regex finds the pattern anywhere in the window.</li>
 <li><strong>Self-filtering</strong>: the caller compares the detected nonce against <code>myNonce</code> — if some path echoes our own preamble back (a misbehaving bridge), we ignore it rather than "pairing with ourselves".</li>
-<li><strong>Duplicate-emission safe</strong>: Plivo occasionally double-fires a tone; the 64-char window plus reset-on-match keeps that harmless.</li>
+<li><strong>Duplicate-emission safe</strong>: the provider occasionally double-fires a tone; the 64-char window plus reset-on-match keeps that harmless.</li>
 </ul>
 
 <h2>The twin-leg problem and dtmfBus</h2>
-<p>Plivo sometimes books <strong>two call_uuids for one PSTN leg</strong> and opens a Stream WS for each. Two consequences the code handles explicitly:</p>
+<p>The provider sometimes books <strong>two call_uuids for one PSTN leg</strong> and opens a Stream WS for each. Two consequences the code handles explicitly:</p>
 <ol>
 <li><strong>Only one handshake per number.</strong> <code>runStateMachine</code> takes a per-agent-number lock (<code>handshakeInProgress</code> Map). The twin's WS parks until close. Without this, both twins would handshake and then fight over the orchestrator claim.</li>
 <li><strong>DTMF may arrive on the "wrong" twin.</strong> Empirically the dtmf events fire on one specific twin — not necessarily the one holding the lock. Hence the <code>dtmfBus</code>: <em>every</em> twin's voiceHandler publishes every dtmf digit onto a per-number EventEmitter channel, and the (single) handshake subscribes to the <em>number</em>, not the socket. Fan-in solves the ambiguity.</li>

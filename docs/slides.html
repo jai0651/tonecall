@@ -126,7 +126,7 @@
       <em>Fax tones</em> &middot; for the AI era.
     </p>
     <p class="small" style="margin-top: 4em;">
-      Plivo Hackathon · 2026
+      CPaaS Hackathon · 2026
     </p>
   </div>
   <aside class="notes">
@@ -141,9 +141,9 @@
     side-channel — same logic as a fax machine screeching at the start of
     a call, but for AI agents."
 
-    "Today we're demoing it on Plivo, two of our own DIDs calling each
+    "Today we're demoing it on our CPaaS provider, two of our own DIDs calling each
     other. The protocol is AVIP-0 — Agent Voice Interop Protocol v0. We see it as
-    a wedge for Plivo to own a standard the way DKIM owns email signing."
+    a wedge for a CPaaS provider to own a standard the way DKIM owns email signing."
 
     End on: "Let me show you."
   </aside>
@@ -240,7 +240,7 @@ slow + expensive                fast + cheap</code></pre>
     <h1 style="font-size: 3.5em;">Live demo</h1>
     <div class="demo-card" style="margin-top: 2em;">
       <p style="font-size: 1em; color: #cbd5e1; margin: 0;">
-        Two Plivo DIDs. Real OpenAI. Real PSTN.
+        Two CPaaS DIDs. Real OpenAI. Real PSTN.
       </p>
       <p style="font-size: 0.6em; color: var(--slate); margin-top: 0.5em; margin-bottom: 0;">
         +1&middot;480&middot;790&middot;6332 &nbsp;↔&nbsp; +1&middot;678&middot;400&middot;6155
@@ -277,7 +277,7 @@ slow + expensive                fast + cheap</code></pre>
 <section data-background-color="#0a0a0a">
   <h2>What just happened</h2>
   <p style="margin-bottom: 0.8em; color: var(--slate); font-size: 0.8em;">
-    Real run. 7-turn produce order, end-to-end on real Plivo + real GPT-5.2.
+    Real run. 7-turn produce order, end-to-end on a real CPaaS provider + real GPT-5.2.
   </p>
   <div class="stat-grid">
     <div class="stat">
@@ -302,18 +302,18 @@ slow + expensive                fast + cheap</code></pre>
     </div>
   </div>
   <p style="margin-top: 1.2em; color: var(--slate); font-size: 0.6em; text-align: center;">
-    Multiply by Plivo's call volume → billions of dollars a year, industry-wide.
+    Multiply by the platform's call volume → billions of dollars a year, industry-wide.
   </p>
   <aside class="notes">
     Back to slides after the demo finishes (or while metrics card is
     still on the projected dashboard).
 
-    "These are the numbers from the run you just saw. 7-turn order, real
-    Plivo, real GPT-5.2. Voice phase 64 seconds, data phase 13 seconds,
+    "These are the numbers from the run you just saw. 7-turn order, a real
+    CPaaS provider, real GPT-5.2. Voice phase 64 seconds, data phase 13 seconds,
     61 seconds saved on the negotiation. 52% cheaper than the voice-only
     baseline for the same deal."
 
-    "Per call that's modest. Multiply by Plivo's volume and the savings
+    "Per call that's modest. Multiply by the platform's volume and the savings
     are an industry-wide unlock."
   </aside>
 </section>
@@ -328,7 +328,7 @@ slow + expensive                fast + cheap</code></pre>
   </p>
 <pre><code>┌────────────┐                                ┌────────────┐
 │  Agent A   │   ① both legs hit the broker   │  Agent B   │
-│  Plivo DID │ ←──── shared coordination ────→│  Plivo DID │
+│  CPaaS DID │ ←──── shared coordination ────→│  CPaaS DID │
 └─────┬──────┘            key                 └─────┬──────┘
       │                                              │
       │     ② broker pairs them — same sessionId    │
@@ -338,7 +338,7 @@ slow + expensive                fast + cheap</code></pre>
       │                                              │
       └────────────── JSON over WS ──────────────────┘
 
-     Voice channel stays bridged via Plivo Conference (in case
+     Voice channel stays bridged via the provider's Conference (in case
      a human joins, or for the spoken intro/goodbye).</code></pre>
   <p style="margin-top: 0.8em; color: var(--slate); font-size: 0.65em;">
     Cross-vendor variant: in-band DTMF preamble <code>9090&lt;nonce&gt;#</code>
@@ -370,7 +370,7 @@ slow + expensive                fast + cheap</code></pre>
   <table style="font-size: 0.75em;">
     <tr>
       <td style="width: 30%; color: var(--chirp); font-weight: 700;">Cross-vendor</td>
-      <td>Any AI agent on any CPaaS (Plivo, Twilio, Telnyx…) can implement it.</td>
+      <td>Any AI agent on any CPaaS provider can implement it.</td>
     </tr>
     <tr>
       <td style="color: var(--chirp); font-weight: 700;">Transport-agnostic</td>
@@ -386,16 +386,16 @@ slow + expensive                fast + cheap</code></pre>
     </tr>
   </table>
   <p style="margin-top: 1.5em; font-size: 0.75em; color: #cbd5e1;">
-    Plivo can own this the way <em>Twilio owns TwiML</em>,
+    A CPaaS provider can own this the way <em>Twilio owns TwiML</em>,
     <em>AWS owns the S3 API</em>, <em>Cloudflare owns Workers</em>.
   </p>
   <aside class="notes">
-    Lean into the protocol framing. This is the business pitch — Plivo
-    has been a great CPaaS but doesn't OWN a developer standard. AVIP-0
+    Lean into the protocol framing. This is the business pitch — a CPaaS
+    provider can be great at CPaaS but not yet OWN a developer standard. AVIP-0
     is the wedge. Spec is free, broker infrastructure is the product.
 
     Compare to TwiML: Twilio's secret weapon for 15 years has been that
-    every webhook in voice apps speaks TwiML. Even Plivo speaks TwiML
+    every webhook in voice apps speaks TwiML. Even competing CPaaS platforms speak TwiML
     syntax for compat. That's an enormous moat.
 
     AVIP-0 can be the same.
@@ -439,7 +439,7 @@ slow + expensive                fast + cheap</code></pre>
   <aside class="notes">
     The roadmap. The key data point: AVIP-1 was verified 2 hours ago via
     the probe at /api/trigger-dial-probe — we sent "90901234#" via
-    Plivo's sendDTMF event on one leg and observed all 9 digits arrive
+    the provider's sendDTMF event on one leg and observed all 9 digits arrive
     on the peer leg's stream. The Dial bridge carries DTMF end-to-end.
 
     AVIP-2 is the headline UX upgrade — humans don't hear the handshake.
@@ -465,10 +465,10 @@ slow + expensive                fast + cheap</code></pre>
       at the <em>speed of the internet</em>.
     </p>
     <p style="font-size: 1.1em; color: var(--chirp); margin-top: 2em; font-weight: 600;">
-      Plivo can own this protocol.
+      A CPaaS provider can own this protocol.
     </p>
     <p class="small" style="margin-top: 3em;">
-      <code>github.com/plivo-hackathon/tonecall</code> &middot;
+      <code>github.com/jai0651/tonecall</code> &middot;
       <code>docs/architecture.md</code> &middot;
       <code>docs/future-protocol.md</code>
     </p>
@@ -483,7 +483,7 @@ slow + expensive                fast + cheap</code></pre>
     on a call, they shouldn't be wasting your phone bill talking to
     each other in English. They should be doing what fax machines did
     in 1985: handshake, switch to data, do the actual transaction in
-    a second. Tonecall is the protocol. Plivo can make it the standard.
+    a second. Tonecall is the protocol. A CPaaS provider can make it the standard.
     Thanks."
 
     Then take questions. Refer to docs/demo.md §3 (FAQs) and §4 (Deep

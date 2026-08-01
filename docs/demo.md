@@ -20,7 +20,7 @@ curl -s -o /dev/null -w "ngrok HTTP %{http_code}\n" \
 lsof -nP -iTCP:3000 -sTCP:LISTEN | head -2
 # expect: one node process listening
 
-# 3. Plivo Application URLs point at /api/answer (not /api/answer-dial-probe)
+# 3. Provider Application URLs point at /api/answer (not /api/answer-dial-probe)
 for APP in 23820040522110407 11581818029773360; do
   curl -sS -u "$PLIVO_AUTH_ID:$PLIVO_AUTH_TOKEN" \
     "https://api.plivo.com/v1/Account/$PLIVO_AUTH_ID/Application/$APP/" \
@@ -37,7 +37,7 @@ curl -sN --max-time 2 http://localhost:3000/api/events | head -3
 ```
 
 If the dev server needs a restart: `npm run dev` (uses `.env` defaults
-— USE_STUBS=false will hit real Plivo + OpenAI).
+— USE_STUBS=false will hit a real CPaaS provider + OpenAI).
 
 Have **two** terminal tabs and **one** browser tab visible to the
 projector:
@@ -68,9 +68,9 @@ projector:
 > in 200ms per turn instead of 4 seconds. Same negotiation that took
 > 45 seconds in voice mode closes in 3 seconds in data mode.
 >
-> Today we're demoing it on Plivo, two of our own DIDs calling each
-> other. The protocol is called **AVIP-0 — Agent Voice Interop Protocol v0**.
-> We see it as a wedge for Plivo to own a standard the way DKIM owns
+> Today we're demoing it on our CPaaS provider, two of our own DIDs calling
+> each other. The protocol is called **AVIP-0 — Agent Voice Interop Protocol v0**.
+> We see it as a wedge for a CPaaS provider to own a standard the way DKIM owns
 > email signing.
 
 End on: *"Let me show you."*
@@ -110,7 +110,7 @@ Then click trigger.
 
 **t=2-5 (both legs answer, "AVIP-0 paired" badge appears).** Point at
 the green badge.
-> "Plivo has bridged the two calls into a conference room. The agents
+> "Our CPaaS provider has bridged the two calls into a conference room. The agents
 > have just discovered each other through our broker — that's the
 > 'AVIP-0 paired' badge. Took less than a second."
 
@@ -153,7 +153,7 @@ metric cards.
 > - **Latency saved**: 61 seconds vs what voice-only would have taken
 >   for the same 7-turn deal.
 > - **Cost saved**: $0.25 on this one call — 52% less than the
->   voice-only baseline. Multiply that by Plivo's volume and the
+>   voice-only baseline. Multiply that by a large CPaaS provider's volume and the
 >   savings are billions of dollars a year."
 
 End on: *"That's the wedge. Questions?"*
@@ -162,7 +162,7 @@ End on: *"That's the wedge. Questions?"*
 
 | Failure | What you see | Recovery |
 |---|---|---|
-| One leg doesn't ring | only `vegetable_vendor` log line, no `pizza_shop` | Check Plivo Application URL is still `/api/answer` (see preflight #3). Patch it via the curl in §4. |
+| One leg doesn't ring | only `vegetable_vendor` log line, no `pizza_shop` | Check the provider Application URL is still `/api/answer` (see preflight #3). Patch it via the curl in §4. |
 | Both rings but no pairing badge | "voice_intro" chip never appears | Conference name probably stale. Wait for the 15s pair timeout, then say "the system fell back to human voice mode — let me retry." Click trigger again. |
 | LLM rate-limit / OpenAI 429 | Voice plane has 1-2 lines then stops | Honest move: *"OpenAI just rate-limited us mid-demo — this is a hackathon-level OpenAI key. The protocol is working; the agent's brain is what stalled."* |
 | Dashboard freezes | event chips stop updating | Refresh the page; SSE reconnects automatically; events from the same call should resume. |
@@ -180,7 +180,7 @@ Quick, confident answers. Memorize these.
 
 ### "Is this actually running, or is it scripted?"
 
-Real Plivo, real OpenAI, real PSTN. The two numbers on screen are real
+Real CPaaS provider, real OpenAI, real PSTN. The two numbers on screen are real
 DIDs I own. You can dial them yourself from your phone right now if you
 want — try `+1AAAAAAAAAA`, you'll get the vegetable vendor agent in
 human-voice mode.
@@ -199,7 +199,7 @@ voice channel is the always-available fallback.
 Because anyone — Twilio, Telnyx, OpenAI's voice mode, ElevenLabs — can
 implement it. The handshake is in-band over DTMF (or via well-known
 endpoints in the v3+ design), so any AI agent platform that speaks AVIP-0
-can pair with any other. That's the wedge: Plivo gets to define the
+can pair with any other. That's the wedge: the CPaaS provider gets to define the
 spec.
 
 ### "How much faster is it actually?"
@@ -235,8 +235,8 @@ relicense MIT post-hackathon.
 ### "Why two phone numbers instead of one?"
 
 Because in production this isn't two of our agents talking to
-themselves — it's the pizza shop's agent (on Plivo) calling the
-vegetable vendor's agent (on Twilio). Two real businesses, two
+themselves — it's the pizza shop's agent (on one CPaaS provider) calling the
+vegetable vendor's agent (on a different one). Two real businesses, two
 unrelated CPaaS providers. We use two of our own DIDs in the demo
 because it's the simplest setup that exercises the full handshake.
 
@@ -276,11 +276,11 @@ the broker matches them and returns a shared session id.
 
 This is the "single-vendor pragmatic" path. The protocol-portable path
 — what AVIP-1 ships — is in-band: each agent plays `9090<8-digit-nonce>#`
-as DTMF using Plivo's `sendDTMF` WebSocket event, and listens for the
+as DTMF using the provider's `sendDTMF` WebSocket event, and listens for the
 peer's preamble on its own stream as `dtmf` JSON events. The broker
 matches cross-wise nonces.
 
-We empirically verified that Plivo's `<Dial>` bridge carries DTMF
+We empirically verified that the provider's `<Dial>` bridge carries DTMF
 end-to-end (the probe at `/api/trigger-dial-probe` injected
 `90901234#` on one leg and observed all 9 digits arrive intact on
 the peer leg's stream). So the in-band path will work cross-vendor
@@ -288,7 +288,7 @@ the moment we redirect from `<Conference>` to `<Dial>` bridging.
 
 ### "Why does the in-band path not work on `<Conference>`?"
 
-Plivo's bidirectional `<Stream>` requires `audio_track="inbound"`. The
+The provider's bidirectional `<Stream>` requires `audio_track="inbound"`. The
 Conference mixer reads each leg's inbound audio and writes the mix to
 each leg's outbound. Anything we inject onto our leg (playAudio,
 sendDTMF) lands on the leg's outbound side, which the mixer never
@@ -296,7 +296,7 @@ reads. So the signal never reaches the peer leg.
 
 `<Dial>` is a direct SIP/PSTN wire instead — leg A's outbound IS leg
 B's inbound. We proved DTMF crosses cleanly. The conference workaround
-existed because Plivo previously refused same-account self-DID Dial
+existed because the provider previously refused same-account self-DID Dial
 ("Ring Timeout"); that turned out to be a stale Application URL on
 one of the DIDs, which we fixed. The refactor to drop Conference is
 ~150 lines and will ship post-hackathon.
@@ -391,7 +391,7 @@ Three layers to swap:
 ### "What about latency variability — what's actually slow today?"
 
 Per the live run we just did:
-- Plivo originate → DID rings → answers: ~1–2s.
+- CPaaS provider originate → DID rings → answers: ~1–2s.
 - Stream WS opens: ~50ms.
 - Voice intro (per turn): ~4–8s (TTS first-byte latency dominates;
   OpenAI tts-1 is batch).
@@ -404,7 +404,7 @@ ElevenLabs streaming would cut ~3 seconds per voice turn. Whisper is
 batch; switching to streaming STT removes another 800ms per turn.
 Both are drop-in replacements for `src/lib/tts.ts` and `src/lib/stt.ts`.
 
-### "What's the cost on Plivo's side?"
+### "What's the cost on the CPaaS provider's side?"
 
 Looking at this run's dial-events:
 - Both legs billed at $0.0115/min for the PSTN side (one Account 1 →
@@ -413,7 +413,7 @@ Looking at this run's dial-events:
 - Plus OpenAI: ~5k tokens for the voice phase, ~3k for data phase →
   $0.05 in LLM, $0.02 in TTS, $0.01 in STT.
 
-Total per call ≈ $0.25. The cost saving is mostly OpenAI; the Plivo
+Total per call ≈ $0.25. The cost saving is mostly OpenAI; the CPaaS provider's
 minutes are a small fraction.
 
 ### "What if the LLM hallucinates the structured fields?"
@@ -426,8 +426,8 @@ trip. The protocol is robust to schema drift.
 
 ### "Can both sides be on the same physical CPaaS account?"
 
-Yes — that's what today's demo is. Both DIDs are on the same Plivo
-account. Conference handles the bridging because Plivo refused
+Yes — that's what today's demo is. Both DIDs are on the same CPaaS
+account. Conference handles the bridging because the provider refused
 same-account `<Dial>` *historically* (we now know it was a stale
 Application URL, not a platform constraint). Cross-account is also
 possible via real PSTN bridging.
@@ -447,7 +447,7 @@ escape) while moving the actual work to JSON.
 ### "How long did this take to build?"
 
 This iteration: 2 days of focused work after the hackathon kicked
-off Friday afternoon. The bones (Plivo wiring, Stream WebSocket,
+off Friday afternoon. The bones (CPaaS wiring, Stream WebSocket,
 the voice loop) were a previous evening's prototype. The protocol
 work, the orchestrator, the metrics, the dashboard, the docs — all
 in the last 48 hours.
@@ -477,7 +477,7 @@ If the demo went well, end on:
 > a call, they shouldn't be wasting your phone bill talking to each
 > other in English. They should be doing what fax machines did in
 > 1985: handshake, switch to data, do the actual transaction in a
-> second. Tonecall is the protocol. Plivo can make it the standard.
+> second. Tonecall is the protocol. A CPaaS provider can make it the standard.
 > Thanks."
 
 If the demo broke, end on:
@@ -485,7 +485,7 @@ If the demo broke, end on:
 > "The protocol works — we showed it end-to-end in our own runs and
 > have the metrics from real calls in the docs. Hackathon demos are
 > hackathon demos. The interesting question is whether this idea —
-> 'fax tones for AI agents' — is something Plivo should own as a
+> 'fax tones for AI agents' — is something a CPaaS provider should own as a
 > spec. I think yes. Happy to talk through any layer of the stack."
 
 ---
@@ -495,7 +495,7 @@ If the demo broke, end on:
 If a judge wants to dig in:
 - **Show them**: `docs/architecture.md` (current code), then
   `docs/future-protocol.md` (the roadmap).
-- **Run the simulator** on your laptop without burning Plivo credit:
+- **Run the simulator** on your laptop without burning CPaaS credit:
   `USE_STUBS=true npm run dev` then `POST /api/simulate`. Shows the
   protocol pairing via in-band nonces (the simulator forwards
   `sendDTMF` events between legs, mimicking cross-vendor PSTN).
@@ -504,12 +504,13 @@ If a judge wants to dig in:
   cleanly; the rewrite to make it the default is the next ship.
 
 If a judge wants to talk business:
-- Plivo is a B2C-style CPaaS company. AVIP-0 is their B2B moat. Every
-  vendor that builds on AVIP-0 either runs on Plivo (compatible by
-  default) or has to do the work to integrate with the spec Plivo
-  authored. Same playbook as Twilio with TwiML, AWS with the S3 API.
+- This is a B2C-style CPaaS company's opportunity: AVIP-0 becomes their
+  B2B moat. Every vendor that builds on AVIP-0 either runs on that
+  provider (compatible by default) or has to do the work to integrate
+  with the spec the provider authored. Same playbook as Twilio with
+  TwiML, AWS with the S3 API.
 - The protocol can be a free open spec. The infrastructure to host
   the federated broker — the well-known directory of trusted agents,
-  the HMAC verification at scale — that's the product Plivo sells.
+  the HMAC verification at scale — that's the product a CPaaS provider sells.
 
 Good luck.

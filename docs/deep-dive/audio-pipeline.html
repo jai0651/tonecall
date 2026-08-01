@@ -42,24 +42,24 @@ a{color:var(--accent)}
 <h1>Audio Pipeline — every byte on the voice wire</h1>
 <p class="sub">Files: <code>src/lib/audio.ts</code>, <code>src/lib/audioCodec.ts</code>, <code>src/lib/tts.ts</code>, <code>src/lib/stt.ts</code>, <code>src/ws/voiceTurn.ts</code>, <code>src/ws/voiceMode.ts</code>, <code>src/lib/plivo.ts</code>.</p>
 
-<h2>The Plivo Stream WebSocket — wire protocol</h2>
-<p>Declared by the answer XML: <code>&lt;Stream keepCallAlive="true" bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"&gt;wss://…/voice/&lt;callUuid&gt;&lt;/Stream&gt;</code>. Plivo then connects to us (we are the WS <em>server</em>). Constraint to memorize: <code>bidirectional="true"</code> forces <code>audioTrack="inbound"</code> — we hear what the far side sends, and can inject audio toward our side's speaker. Across a Dial bridge that's exactly symmetric: my playAudio = your inbound.</p>
+<h2>The provider Stream WebSocket — wire protocol</h2>
+<p>Declared by the answer XML: <code>&lt;Stream keepCallAlive="true" bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"&gt;wss://…/voice/&lt;callUuid&gt;&lt;/Stream&gt;</code>. The provider then connects to us (we are the WS <em>server</em>). Constraint to memorize: <code>bidirectional="true"</code> forces <code>audioTrack="inbound"</code> — we hear what the far side sends, and can inject audio toward our side's speaker. Across a Dial bridge that's exactly symmetric: my playAudio = your inbound.</p>
 
-<h3>Plivo → us (JSON text frames)</h3>
+<h3>Provider → us (JSON text frames)</h3>
 <table>
 <tr><th>Event</th><th>Shape (abridged)</th><th>When / what we do</th></tr>
 <tr><td><code>start</code></td><td><code>{event:"start", start:{callId, streamId, mediaFormat:{encoding:"mulaw", sampleRate:8000}, tracks}}</code></td><td>Stream established. We log it; nothing else keys off it.</td></tr>
 <tr><td><code>media</code></td><td><code>{event:"media", media:{payload:"&lt;base64&gt;", track, timestamp, chunk}}</code></td><td>Every ~20ms: 160 bytes of μ-law (base64 → ~216 chars). voiceHandler taps it for debug capture/live playback; voiceMode feeds it to STT; the handshake ignores it.</td></tr>
-<tr><td><code>dtmf</code></td><td><code>{event:"dtmf", dtmf:{digit:"7", track}}</code></td><td>One event per detected tone — Plivo does the tone→symbol decoding (in-band or RFC 2833, we never know which). Forwarded to the <a href="handshake.html">dtmfBus</a>.</td></tr>
+<tr><td><code>dtmf</code></td><td><code>{event:"dtmf", dtmf:{digit:"7", track}}</code></td><td>One event per detected tone — the provider does the tone→symbol decoding (in-band or RFC 2833, we never know which). Forwarded to the <a href="handshake.html">dtmfBus</a>.</td></tr>
 <tr><td><code>stop</code></td><td><code>{event:"stop", stop:{reason}}</code></td><td>Stream ending. voiceMode resolves its loop on this.</td></tr>
 <tr><td><code>playedStream</code> / <code>clearedAudio</code></td><td>ack events</td><td>Currently unused (typed for completeness).</td></tr>
 </table>
 
-<h3>Us → Plivo (JSON text frames)</h3>
+<h3>Us → provider (JSON text frames)</h3>
 <table>
 <tr><th>Event</th><th>Shape</th><th>Producer</th></tr>
-<tr><td><code>playAudio</code></td><td><code>{event:"playAudio", media:{contentType:"audio/x-mulaw", sampleRate:8000, payload:"&lt;base64&gt;"}}</code></td><td><code>playAudioFrame()</code> — all TTS output. Plivo queues payloads and plays them in order onto the leg's outbound.</td></tr>
-<tr><td><code>sendDTMF</code></td><td><code>{event:"sendDTMF", dtmf:"909012345678#"}</code></td><td><code>sendDtmfOverStream()</code> — the handshake preamble. Same effect as REST <code>sendDigits</code> but ~0ms RTT (no HTTP round trip). Plivo synthesizes proper tones/2833 events onto outbound.</td></tr>
+<tr><td><code>playAudio</code></td><td><code>{event:"playAudio", media:{contentType:"audio/x-mulaw", sampleRate:8000, payload:"&lt;base64&gt;"}}</code></td><td><code>playAudioFrame()</code> — all TTS output. The provider queues payloads and plays them in order onto the leg's outbound.</td></tr>
+<tr><td><code>sendDTMF</code></td><td><code>{event:"sendDTMF", dtmf:"909012345678#"}</code></td><td><code>sendDtmfOverStream()</code> — the handshake preamble. Same effect as REST <code>sendDigits</code> but ~0ms RTT (no HTTP round trip). The provider synthesizes proper tones/2833 events onto outbound.</td></tr>
 <tr><td><code>clearAudio</code> / <code>checkpoint</code></td><td>flush / position-mark</td><td>Helpers exist (<code>clearAudioFrame</code>, <code>checkpointFrame</code>); nothing calls them yet — they're the primitives a future barge-in implementation needs.</td></tr>
 </table>
 
@@ -91,7 +91,7 @@ speak({ws, speakerName, text, voice, waitForDuration=true, tailMs=150})
  1. publish voice.transcript FIRST        # dashboard shows the line before audio exists
  2. tts.synthesize({text, voice})         # → Buffer of μ-law 8kHz
  3. ws.send(playAudioFrame(chunk)) per 1600B chunk, no pacing
-    # Plivo buffers; pacing only matters if you want to interrupt mid-utterance
+    # The provider buffers; pacing only matters if you want to interrupt mid-utterance
  4. if waitForDuration: sleep(audio.length / 8000 × 1000 + tailMs)
     # SENDING is instant; this sleep models PLAYBACK so callers can sequence turns
 </pre>

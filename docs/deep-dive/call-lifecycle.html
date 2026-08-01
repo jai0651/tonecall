@@ -56,7 +56,7 @@ middleware        = this Next.js + ws process, reachable at PUBLIC_HOST
 <h2>Timeline at a glance</h2>
 <pre>
 t≈0.0s   POST /api/trigger-call            (dashboard button)
-t≈0.1s   Plivo REST originate → DID A rings
+t≈0.1s   Provider REST originate → DID A rings
 t≈1–2s   DID A answers → POST /api/answer  (leg A)  → XML: Stream + Dial B
 t≈2s     wss /voice/&lt;callA&gt; opens          (leg A stream live)
 t≈2.5s   leg A emits DTMF preamble #1      (usually lost — B still ringing)
@@ -78,14 +78,14 @@ callerId = body.callerId ?? PLIVO_CALLER_ID ?? numberA</pre>
 <p>Guard: if <code>getAgentConfig(numberA)</code> is undefined (this middleware doesn't own it — e.g. wrong instance in federated mode) → <code>400 numberA_not_owned</code>. Then two things happen, in order:</p>
 <ol>
 <li><code>setPendingDial(numberA, numberB)</code> — writes the intent "when numberA answers, Dial numberB" into the <a href="state-registries.html">dialRegistry</a> (60s TTL).</li>
-<li><code>plivoClient.originate({from: callerId, to: numberA, answerUrl, accountId:'1'})</code> — ONE outbound call. The <code>answerUrl</code> parameter is passed but effectively ignored: when the destination of an originate is a same-account DID with an Application attached, Plivo runs the <em>Application's</em> answer URL instead.</li>
+<li><code>plivoClient.originate({from: callerId, to: numberA, answerUrl, accountId:'1'})</code> — ONE outbound call. The <code>answerUrl</code> parameter is passed but effectively ignored: when the destination of an originate is a same-account DID with an Application attached, the provider runs the <em>Application's</em> answer URL instead.</li>
 </ol>
 <p>Response to the dashboard: <code>{ok, mode:'dial_bridge', originator:{to, dialTarget, requestUuid}}</code>. A <code>call.triggered</code> event goes out on the eventBus.</p>
 </div>
 
-<div class="step"><span class="who">Plivo → middleware (leg A)</span>
+<div class="step"><span class="who">Provider → middleware (leg A)</span>
 <h3>Step 2 — Answer webhook, initiator leg</h3>
-<p>DID A "answers" (its Application does), and Plivo POSTs form-encoded data to <code>/api/answer</code>:</p>
+<p>DID A "answers" (its Application does), and the provider POSTs form-encoded data to <code>/api/answer</code>:</p>
 <pre>CallUUID=aaaa-1111-…   From=+1CCCCCCCCCC (caller-ID)   To=+1AAAAAAAAAA (DID A)   …</pre>
 <p>The handler (<code>src/app/api/answer/route.ts</code>) walks through:</p>
 <ol>
@@ -104,7 +104,7 @@ callerId = body.callerId ?? PLIVO_CALLER_ID ?? numberA</pre>
 <p>Order matters: <code>&lt;Stream&gt;</code> executes first so our WS is attached <em>before</em> the Dial starts ringing B — we must be listening before the bridge exists. The Dial's <code>callerId</code> is DID A itself, so leg B's webhook sees <code>From=+1AAAAAAAAAA</code>: a stable, meaningful identity.</p>
 </div>
 
-<div class="step"><span class="who">Plivo → middleware (leg B)</span>
+<div class="step"><span class="who">Provider → middleware (leg B)</span>
 <h3>Step 3 — Answer webhook, responder leg</h3>
 <p>The <code>&lt;Dial&gt;</code> rings DID B. DID B's Application fires <em>its</em> answer URL (same route in single-middleware mode; the peer middleware in federation):</p>
 <pre>CallUUID=bbbb-2222-…   From=+1AAAAAAAAAA   To=+1BBBBBBBBBB</pre>
@@ -114,10 +114,10 @@ callerId = body.callerId ?? PLIVO_CALLER_ID ?? numberA</pre>
         contentType="audio/x-mulaw;rate=8000"&gt;wss://PUBLIC_HOST/voice/bbbb-2222-…&lt;/Stream&gt;
 &lt;Wait length="600"/&gt;
 &lt;/Response&gt;</pre>
-<p>The <code>&lt;Wait&gt;</code> is the load-bearing fix: the hackathon build returned <code>&lt;Conference&gt;</code> here, which yanked the leg into a mixer and broke the Dial bridge (the historical "same-account Dial hits Ring Timeout" mystery). With <code>&lt;Wait&gt;</code>, answering completes the Dial and Plivo bridges the legs: <strong>leg A's outbound audio is now leg B's inbound audio, and vice versa</strong>. A human dialing DID B directly gets this exact same XML — the callee leg makes no assumptions about who's calling.</p>
+<p>The <code>&lt;Wait&gt;</code> is the load-bearing fix: the hackathon build returned <code>&lt;Conference&gt;</code> here, which yanked the leg into a mixer and broke the Dial bridge (the historical "same-account Dial hits Ring Timeout" mystery). With <code>&lt;Wait&gt;</code>, answering completes the Dial and the provider bridges the legs: <strong>leg A's outbound audio is now leg B's inbound audio, and vice versa</strong>. A human dialing DID B directly gets this exact same XML — the callee leg makes no assumptions about who's calling.</p>
 </div>
 
-<div class="step"><span class="who">Plivo → middleware (both legs)</span>
+<div class="step"><span class="who">Provider → middleware (both legs)</span>
 <h3>Step 4 — Voice WebSockets connect</h3>
 <p><code>server.ts</code> catches the HTTP upgrade, matches <code>/^\/voice\/([^/]+)$/</code>, and hands the socket to <code>handleVoiceConnection(ws, callUuid)</code> (<code>src/ws/voiceHandler.ts</code>), which per leg:</p>
 <ol>
@@ -165,7 +165,7 @@ callerId = body.callerId ?? PLIVO_CALLER_ID ?? numberA</pre>
 <pre>greet (persona-fixed line, e.g. "Hi, this is Anil from Mumbai Fresh Produce…")
 loop: media frames → stt.feed() buffers until ~1.4s speech + 500ms silence
       → whisper transcript → llm.respondText(persona, history) → tts → speak
-until WS closes or Plivo sends event:"stop" → REST hangup</pre>
+until WS closes or the provider sends event:"stop" → REST hangup</pre>
 <p>The pre-Dial-topology build had a bug here worth remembering: every inbound call computed a deterministic conference name, so the state machine waited 15s for a conference peer, failed, and <em>hung up on the human</em>. The current fallback is timeout → greet.</p>
 </div>
 

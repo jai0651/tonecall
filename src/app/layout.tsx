@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Tonecall — Inter-Agent Voice Handshake',
-  description: 'Fax tones for AI agents, brokered by Plivo.',
+  description: 'Fax tones for AI agents, brokered by your CPaaS provider.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

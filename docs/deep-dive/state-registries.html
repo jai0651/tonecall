@@ -105,7 +105,7 @@ const map = (G.__tonecall_call_registry ??= new Map());</pre>
 </table>
 
 <h2>The three twin defenses, side by side</h2>
-<p>Plivo's twin call_uuids threaten three different stages; each has its own guard because they trigger at different times:</p>
+<p>The provider's twin call_uuids threaten three different stages; each has its own guard because they trigger at different times:</p>
 <table>
 <tr><th>#</th><th>Guard</th><th>Stage</th><th>Prevents</th></tr>
 <tr><td>1</td><td>handshake lock (per number)</td><td>WS open</td><td>two concurrent handshakes for one agent</td></tr>
@@ -119,8 +119,8 @@ lost:  every in-flight call registration, dial role, pending pair,
        session, data relay membership, SSE subscription
 kept:  nothing (there is no disk/Redis persistence)
 
-symptom on restart mid-call: Plivo's Stream WS reconnects? No — the socket
-drops; keepCallAlive keeps the CALL up until &lt;Wait&gt; expires or Plivo times
+symptom on restart mid-call: the provider's Stream WS reconnects? No — the socket
+drops; keepCallAlive keeps the CALL up until &lt;Wait&gt; expires or the provider times
 the stream out, but the middleware no longer knows the callUuid → the leg
 is orphaned until hangup/timeout.
 </pre>

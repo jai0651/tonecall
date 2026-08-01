@@ -6,7 +6,7 @@ and switch to a JSON side-channel. When the peer is a human, stay in voice
 the whole time.
 
 ```
-caller → +1-NUMBER → Plivo → tonecall middleware →
+caller → +1-NUMBER → your CPaaS provider → tonecall middleware →
   ├─ peer is an agent  → voice intro → JSON over /data WS → voice goodbye
   │                       (~10s)         (~3s, fast path)      (~5s)
   └─ peer is a human   → STT → LLM → TTS loop                  (~4-6s/turn)
@@ -25,14 +25,14 @@ This README is the quick-start.
 server.ts                  # Next.js + ws (one process)
 src/app/                   # Demo dashboard + API routes
 src/ws/                    # voice + data WebSocket handlers, orchestrator
-src/lib/                   # Plivo, OpenAI LLM/STT/TTS, codecs, registries
+src/lib/                   # CPaaS provider, OpenAI LLM/STT/TTS, codecs, registries
 docs/                      # Architecture + protocol writeups
 tonecall_audio/            # (created at runtime) WAV recordings of each utterance
 ```
 
 ## Run modes
 
-### A) Pure-local simulation (no Plivo, no ngrok, no API keys)
+### A) Pure-local simulation (no CPaaS provider, no ngrok, no API keys)
 
 ```bash
 npm install
@@ -60,11 +60,11 @@ curl -X POST http://localhost:3000/api/simulate \
 
 Instance B forwards its events to :3000, so one dashboard shows both legs.
 
-### B) Live demo with real Plivo + OpenAI
+### B) Live demo with a real CPaaS provider + OpenAI
 
 #### 1. Get credentials
 
-- **Plivo** — sign up at <https://console.plivo.com>. You'll need **two
+- **CPaaS provider** — sign up at <https://console.plivo.com>. You'll need **two
   voice-enabled DIDs** for the agent endpoints, plus a third one to use as
   caller-ID for the originate.
 - **OpenAI** — `OPENAI_API_KEY` from <https://platform.openai.com/api-keys>.
@@ -107,18 +107,18 @@ PLAY_LOCAL=true
 RECORD_AUDIO=true             # also dump every utterance to ./tonecall_audio/
 ```
 
-#### 4. Point both Plivo numbers at tonecall
+#### 4. Point both numbers at tonecall
 
-In the Plivo console:
+In the provider console:
 
 1. Create an **Application** with:
    - **Answer URL**: `https://<PUBLIC_HOST>/api/answer`  (POST, no template)
    - **Hangup URL**: `https://<PUBLIC_HOST>/api/hangup`  (POST, optional)
 2. Attach that application to **both** `PLIVO_NUMBER_A` and `PLIVO_NUMBER_B`.
 
-Why a static URL: tonecall reads `To` from Plivo's form-encoded webhook body
+Why a static URL: tonecall reads `To` from the provider's form-encoded webhook body
 to pick the right agent, so the URL itself doesn't need a `{Called}`
-template (which Plivo does not reliably expand anyway).
+template (which providers do not reliably expand anyway).
 
 #### 5. Run + trigger
 
@@ -168,9 +168,9 @@ they just agreed on. Tweak personas there for different demos.
 | Dashboard | `src/app/components/Dashboard.tsx` |
 | SSE event stream | `src/app/api/events/route.ts` |
 | Originate two legs | `src/app/api/trigger-call/route.ts` |
-| Plivo answer URL (one path for both modes) | `src/app/api/answer/route.ts` |
-| Plivo hangup webhook | `src/app/api/hangup/route.ts` |
-| Plivo stream status callback | `src/app/api/stream-status/route.ts` |
+| CPaaS answer URL (one path for both modes) | `src/app/api/answer/route.ts` |
+| CPaaS hangup webhook | `src/app/api/hangup/route.ts` |
+| CPaaS stream status callback | `src/app/api/stream-status/route.ts` |
 | Local simulator | `src/app/api/simulate/route.ts` |
 | Voice WS lifecycle | `src/ws/voiceHandler.ts` |
 | Branches orchestrator vs voice mode | `src/ws/stateMachine.ts` |
@@ -179,12 +179,12 @@ they just agreed on. Tweak personas there for different demos.
 | Human-mode STT→LLM→TTS loop | `src/ws/voiceMode.ts` |
 | Data WS relay | `src/ws/dataHandler.ts` |
 | Broker (conference pairing) | `src/ws/broker.ts` |
-| Plivo REST wrapper | `src/lib/plivo.ts` |
+| CPaaS REST wrapper | `src/lib/plivo.ts` |
 | Per-agent persona + voice + prompt | `src/lib/agentConfigs.ts` |
 | LLM wrapper (gpt-5.2) | `src/lib/llm.ts` |
 | STT (Whisper) | `src/lib/stt.ts` |
 | TTS (tts-1) + WAV record + local playback | `src/lib/tts.ts` |
-| Plivo frame helpers | `src/lib/audio.ts` |
+| CPaaS frame helpers | `src/lib/audio.ts` |
 | mu-law ↔ PCM codec | `src/lib/audioCodec.ts` |
 | Pending conference registry | `src/lib/conferenceRegistry.ts` |
 | Session registry (paired legs) | `src/lib/sessionRegistry.ts` |
@@ -203,6 +203,6 @@ they just agreed on. Tweak personas there for different demos.
 
 ## Status
 
-Live agent ↔ agent has been fired multiple times on real Plivo numbers;
+Live agent ↔ agent has been fired multiple times on real provider numbers;
 live human ↔ agent is wired but simulator-tested only. Everything tunable
 lives in `.env` — model, voice, recording, local playback.

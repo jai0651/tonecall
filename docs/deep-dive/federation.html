@@ -47,7 +47,7 @@ a{color:var(--accent)}
 
 <h2>Topology and env matrix</h2>
 <pre>
-                 PSTN / Plivo Dial bridge
+                 PSTN / provider Dial bridge
    DID A  ◀═══════════ audio + DTMF ═══════════▶  DID B
      │                                              │
      ▼ answer/stream webhooks                       ▼ answer/stream webhooks
@@ -75,7 +75,7 @@ a{color:var(--accent)}
 <tr><th>Step</th><th>Where it runs</th><th>Detail</th></tr>
 <tr><td>Trigger</td><td>instance A only</td><td>Must be A: the <code>numberA_not_owned</code> guard rejects triggering from an instance that doesn't own the originating agent, because the pending-dial stash and the initiator webhook must land in the same process.</td></tr>
 <tr><td>Answer, leg A</td><td>instance A</td><td>Claims the pending dial → <code>&lt;Stream tunnelA&gt;+&lt;Dial B&gt;</code>.</td></tr>
-<tr><td>Answer, leg B</td><td><strong>instance B</strong></td><td>DID B's Plivo Application points at tunnelB. B needs <em>zero advance notice</em> — no peer-notify, no shared key. It treats the call like any inbound: <code>&lt;Stream tunnelB&gt;+&lt;Wait&gt;</code>, responder role.</td></tr>
+<tr><td>Answer, leg B</td><td><strong>instance B</strong></td><td>DID B's provider Application points at tunnelB. B needs <em>zero advance notice</em> — no peer-notify, no shared key. It treats the call like any inbound: <code>&lt;Stream tunnelB&gt;+&lt;Wait&gt;</code>, responder role.</td></tr>
 <tr><td>Handshake</td><td>each instance, own leg</td><td>The preamble rides the bridge; neither process sees the other's emit except as inbound DTMF.</td></tr>
 <tr><td>Pairing</td><td>broker on A</td><td>A submits in-process; B POSTs signed. Same matcher, same sessionId.</td></tr>
 <tr><td>Conversation</td><td>each instance, own leg</td><td>Both claim orchestrator <em>locally</em>, both find only 1 local leg after the 1.5s grace, both take <code>runSoloPairedMode</code>.</td></tr>
@@ -106,7 +106,7 @@ REST hangup own leg                           REST hangup own leg
 </ul>
 
 <h2>The simulators — testing all of this without a phone bill</h2>
-<p>Both fake exactly one thing: Plivo. They open client WSes to <code>/voice/:callUuid</code> and shuttle each leg's outbound <code>sendDTMF</code> to the other leg as inbound <code>dtmf</code> events — byte-for-byte what the Dial bridge does. Everything downstream (handshake, roles, broker, HMAC, paired mode, events) is the production code path.</p>
+<p>Both fake exactly one thing: the CPaaS provider. They open client WSes to <code>/voice/:callUuid</code> and shuttle each leg's outbound <code>sendDTMF</code> to the other leg as inbound <code>dtmf</code> events — byte-for-byte what the Dial bridge does. Everything downstream (handshake, roles, broker, HMAC, paired mode, events) is the production code path.</p>
 <table>
 <tr><th></th><th>Local sim</th><th>Federated sim</th></tr>
 <tr><td>Invoke</td><td><code>POST /api/simulate</code> <code>{}</code></td><td><code>POST /api/simulate</code> <code>{"peerBase":"http://localhost:3001"}</code> on instance A</td></tr>
@@ -127,15 +127,15 @@ curl -X POST http://localhost:3000/api/simulate \
      -d '{"peerBase":"http://localhost:3001"}'
 open http://localhost:3000         # both legs on one dashboard
 </pre>
-<h3>Live over Plivo</h3>
+<h3>Live over the provider</h3>
 <pre>
 1. two tunnels:            ngrok http 3000   +   ngrok http 3001
 2. instance A env:         AGENT_OWNED=vegetable_vendor PUBLIC_HOST=tunnelA
-                           USE_STUBS=false AVIP_PAIR_SECRET=&lt;s&gt; (+ Plivo/OpenAI creds)
+                           USE_STUBS=false AVIP_PAIR_SECRET=&lt;s&gt; (+ provider/OpenAI creds)
    instance B env:         AGENT_OWNED=pizza_shop PUBLIC_HOST=tunnelB
                            BROKER_URL=https://tunnelA FORWARD_EVENTS_TO=https://tunnelA
                            USE_STUBS=false AVIP_PAIR_SECRET=&lt;s&gt;
-3. Plivo console:          DID A's Application → https://tunnelA/api/answer (POST)
+3. Provider console:       DID A's Application → https://tunnelA/api/answer (POST)
                            DID B's Application → https://tunnelB/api/answer (POST)
 4. trigger on A:           curl -X POST https://tunnelA/api/trigger-call
 5. human test:             dial DID B from your phone → 8s quiet → pizza_shop greets you

@@ -2,7 +2,7 @@
   "name": "tonecall",
   "version": "0.0.1",
   "private": true,
-  "description": "Inter-Agent Voice Handshake — fax tones for AI agents, brokered by Plivo.",
+  "description": "Inter-Agent Voice Handshake — fax tones for AI agents, brokered by your CPaaS provider.",
   "scripts": {
     "dev": "node --env-file=.env --import tsx server.ts",
     "dev:a": "AGENT_OWNED=vegetable_vendor PORT=3000 node --env-file=.env --import tsx server.ts",

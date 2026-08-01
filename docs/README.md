@@ -66,9 +66,9 @@ docs/
 
 ## Live state of the repo
 
-- **Demo path**: real Plivo + real OpenAI on `npm run dev` with
+- **Demo path**: real CPaaS provider + real OpenAI on `npm run dev` with
   `USE_STUBS=false`. UI button at `/` POSTs `/api/trigger-call`.
-- **Verified working metrics** (real Plivo run from this hackathon):
+- **Verified working metrics** (real provider run from this hackathon):
   voice 64 s · data 13 s · latency saved 61 s · cost saved $0.25.
 - **AVIP-1 readiness**: the in-band-nonce-over-Dial path is proven
   (probe at `/api/trigger-dial-probe` saw 9/9 DTMF digits cross the
@@ -85,5 +85,5 @@ docs/
 - Phone numbers are written `+1AAAAAAAAAA` (E.164, no spaces or dashes).
 - Voice-protocol jargon is **defined the first time it appears** and
   has a glossary at the bottom of `architecture.md`.
-- Every claim that depends on a Plivo experiment includes the result
+- Every claim that depends on a provider experiment includes the result
   inline (e.g., "verified — 9/9 digits crossed"). No hand-waving.

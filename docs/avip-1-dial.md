@@ -7,7 +7,7 @@
 ## What changed and why
 
 The hackathon build paired agents through **shared middleware state**: both
-legs joined a Plivo `<Conference>` and the broker matched them on a
+legs joined a `<Conference>` on Provider A and the broker matched them on a
 deterministic conference name. That worked, but it wasn't a protocol — it
 only paired agents that happened to land on the same process, and the
 conference mixer physically blocked the in-band DTMF handshake (the
@@ -27,7 +27,7 @@ DID_B's app (any middleware, any vendor) answers:
    <Stream wss://…/voice/B/> + <Wait/>                               ← responder leg
    │
    ▼
-Plivo bridges the legs over real PSTN/SIP. Audio AND DTMF cross
+Provider A bridges the legs over real PSTN/SIP. Audio AND DTMF cross
 end-to-end — verified by the dial-dtmf probe (branch `dial-dtmf`):
 all 13 preamble digits sent on leg A arrived on leg B's stream.
 ```
@@ -53,7 +53,7 @@ Consequences:
   voice greeting. (The conference-era code actually **hung up** on human
   callers after a 15s pair timeout; that bug is gone.)
 - Cross-vendor works by construction: the signal rides the call itself.
-  A Twilio/Vonage agent that plays the same grammar pairs with us.
+  An agent on any other CPaaS provider that plays the same grammar pairs with us.
 
 Both sides then submit cross-wise nonces to the broker (`/api/pair`) and
 get the same sessionId. When `AVIP_PAIR_SECRET` is set, submissions carry
@@ -74,11 +74,11 @@ discover each other over the phone network.
 │ (BROKER_URL unset → this process IS the broker)       │   │ BROKER_URL=https://tunnelA  │
 │ AVIP_PAIR_SECRET=<shared>                              │   │ FORWARD_EVENTS_TO=https://tunnelA
 │                                                       │   │ AVIP_PAIR_SECRET=<shared>    │
-│ DID_A's Plivo Application → tunnelA/api/answer        │   │ DID_B's Application → tunnelB/api/answer
+│ DID_A's Application → tunnelA/api/answer              │   │ DID_B's Application → tunnelB/api/answer
 └───────────────────────────────────────────────────────┘   └─────────────────────────────┘
 ```
 
-Run it locally (stubs, no Plivo cost):
+Run it locally (stubs, no provider cost):
 
 ```bash
 npm run dev:a          # terminal 1 — vegetable_vendor + broker on :3000
@@ -93,7 +93,7 @@ curl -X POST http://localhost:3000/api/simulate \
 Watch the dashboard on :3000 — instance B forwards its events there
 (`FORWARD_EVENTS_TO`), so one screen shows both sides.
 
-Live over Plivo: same two processes behind two tunnels, each DID's
+Live over the provider network: same two processes behind two tunnels, each DID's
 Application pointing at its own middleware, then click **Trigger** (or
 POST `/api/trigger-call`) on instance A. Instance B needs no notice at
 all — its DID simply receives a call and hears the preamble.
@@ -135,7 +135,7 @@ metrics.
 
 ## Still open (next steps on the roadmap)
 
-- Real cross-vendor PSTN test (Plivo ↔ Twilio) — the code path is the one
+- Real cross-vendor PSTN test (Provider A ↔ Provider B) — the code path is the one
   exercised by the federated simulator; needs a deployment, not a change.
 - SIP-header discovery (AVIP-2.1) and TTS audio watermarking to replace the
   audible preamble.
